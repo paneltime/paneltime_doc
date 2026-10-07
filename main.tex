@@ -1,0 +1,787 @@
+\documentclass[12pt]{article}
+
+% Packages for mathematics
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{enumitem}
+\usepackage{setspace}
+\usepackage{url} 
+\usepackage{caption}
+\usepackage{lipsum} % For placeholder text
+\usepackage{booktabs} % For better table formatting
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{authblk}
+\usepackage{makecell}
+
+% Redefine \toprule, \midrule, and \bottomrule with custom thickness
+\newcommand{\CellWithForceBreak}[2][c]{
+\begin{tabular}[#1]{@{}c@{}}#2\end{tabular}}
+\renewcommand{\toprule}{\specialrule{0.1mm}{0em}{0em}}  % Adjust thickness here
+\renewcommand{\midrule}{\specialrule{0.1mm}{0em}{0em}}  % Adjust thickness here
+\renewcommand{\bottomrule}{\specialrule{0.1mm}{0em}{0em}}  % Adjust thickness here
+
+% Packages for graphics and tables
+\usepackage{graphicx}
+\usepackage{booktabs}
+
+% Bibliography
+\usepackage{natbib}
+\bibliographystyle{apalike}
+
+% Define a new environment for quotes with automatic numbering
+\newcounter{prompt}
+\newenvironment{myprompt}[1][]{%
+    \vspace{2em} % Add space before the caption
+    \refstepcounter{prompt} % Increment the prompt counter
+    \noindent\textbf{Prompt \theprompt:} \textit{#1} \\ \vspace{-1.5em} % Add the caption with prompt number and custom text
+    \begin{quote} \small % Start the quote environment with smaller text
+}{%
+    \end{quote} % End the quote environment
+}
+\newcommand{\mydot}{\, \cdot \,}
+
+
+\title{paneltime: Mathematical documentation}
+
+\author{
+  Espen Sirnes\thanks{Tromsø University Business School, University of Tromsø, The Arctic University, Tromsø, Norway.\\
+\textbf{JEL Codes:}  \\
+\textbf{Keywords:} 
+  }
+ 
+
+}
+
+
+\date{August 2024}
+\begin{document}
+\onehalfspacing
+
+\maketitle
+
+In the following, we present the mathematical foundations underlying the code in the \texttt{paneltime} package. \texttt{paneltime} estimates panel data models with a dynamic ARIMA-type mean equation and a GARCH-type conditional variance equation, jointly with random or fixed effects, by maximum likelihood. We begin with fundamental definitions, including the normal distribution. While the reader is likely familiar with this, building from first principles clarifies all relevant variables and assumptions.
+
+\section{Fundamentals}\label{the-ll}
+
+We assume that the standardized residuals $\varepsilon_{i,t}/\sigma_{i,t}$ are normally distributed, so that the conditional density of $\varepsilon_{i,t}$ is
+\begin{equation}
+f\bigl(\varepsilon_{i,t}, \sigma_{i,t}\bigr)
+= \frac{1}{\sqrt{2\pi \,\sigma_{i,t}^{2}}}
+  \exp\!\Bigl(- \tfrac{1}{2}
+      \frac{\varepsilon_{i,t}^{2}}{\sigma_{i,t}^{2}}\Bigr),
+\label{eq:normal_pdf}
+\end{equation}
+The term $\varepsilon_{i,t}$ denotes the residuals after adjustment for ARIMA and Random Effects (RE) or Fixed Effects (FE). These residuals correspond to group $i$, out of $N$ total groups, at time $t$, where $t$ ranges up to a maximum of $T$. The dataset may be unbalanced, meaning some groups can have fewer than $T$ observations. The function $\exp(\cdot)$ denotes the exponential function, and $\sigma_{i,t}^{2}$ is the conditional variance from a GARCH process \citep{engle1982autoregressive,bollerslev1986generalized}, specific to group $i$ at time $t$.
+
+In the remainder of the documentation, we will generally refer to the matrix representation of variables. That is, instead of working with scalar forms $\varepsilon_{i,t}$ and $\sigma_{i,t}^{2}$, we use their matrix counterparts $\mathbf{\varepsilon}$ and $\boldsymbol{\sigma}^{2}$. For instance, $\mathbf{\varepsilon}$ is an $N \times T$ matrix, where the entry in row $i$ and column $t$ corresponds to $\varepsilon_{i,t}$.
+
+In cases where a group has fewer than $T$ observations, its observed values are placed at the beginning of the corresponding row, and the remaining entries are padded with zeros. Therefore, the matrix column index does not correspond to a common calendar date across groups. Any correction for RE or FE along the time dimension must account for this, using the actual date structure rather than assuming aligned positions across rows.
+
+\subsection{Observed Residuals}
+
+The raw, non-stationary observed residuals $\mathbf{u}$ are defined as:
+\begin{equation}
+\mathbf{u}
+= \mathbf{y} - \mathbf{X} \boldsymbol{\beta},
+\label{eq:udef}
+\end{equation}
+where $\mathbf{X}$ is a three-dimensional array of shape $N \times T \times K$, representing $K$ independent variables across $N$ groups and $T$ time periods. $\boldsymbol{\beta}$ is a column vector of $K$ regression coefficients, and $\mathbf{y}$ denotes the dependent variable.
+
+The primary objective of GARCH, ARIMA, and fixed- or random-effects corrections in general---and of the \texttt{paneltime} package specifically---is to transform the raw, non-stationary heterogeneous residuals $\mathbf{u}$ into uncorrelated, homoscedastic, homogeneous residuals $\boldsymbol{\varepsilon}$, and subsequently maximize the likelihood function implied by Equation~\ref{eq:normal_pdf}.
+
+To achieve this, the package simultaneously performs three main transformations on $\mathbf{u}$: correction for random or fixed effects, an ARIMA transformation \citep{box1970time}, and a GARCH transformation \citep{engle1982autoregressive,bollerslev1986generalized}. These steps must be carried out jointly in order to ensure consistent estimation of the model parameters.
+
+
+\subsection{Random/Fixed Effects}
+
+The observed residuals are decomposed into either random (RE) or fixed (FE) effects across time and groups \citep{balestra1966pooling,wooldridge2010econometric}:
+
+\begin{equation}
+u_{RE,i,t}
+= u_{i,t} \;+\; v_{i} \;+\; w_{t},
+\label{eq:rRE_def}
+\end{equation}
+where $v_{i}$ are the group effects and $w_{t}$ are the time effects. Because FE is effectively a special case of RE, obtained in the limit as the variance of $v_i$ and $w_t$ becomes large relative to the idiosyncratic variance \citep{greene2012econometric}, the remainder of this documentation focuses on RE.
+
+\subsection{ARIMA Correction}
+
+Serial dependence is removed via a Box--Jenkins ARIMA($p,d,q$) filter \citep{box1970time}:
+\begin{equation}
+\mathbf{\varepsilon}
+= \mathbf{MA}^{-1} \cdot \mathbf{AR} \cdot \mathbf{\Delta}_{d}\,\mathbf{u}_{RE},
+\label{eq:arima_reduced}
+\end{equation}
+where $\mathbf{\varepsilon}$ is an $N \times T$ matrix of uncorrelated noise terms, and $\mathbf{u}_{RE}$ is the corresponding $N \times T$ matrix of observed ARIMA residuals, differenced $d$ times by the operator $\mathbf{\Delta}_{d}$. The matrices $\mathbf{MA}$ and $\mathbf{AR}$ are $T \times T$ moving average and autoregressive operators, respectively. This operation converts the non-stationary $\mathbf{u}_{RE}$ into the stationary $\mathbf{\varepsilon}$.
+
+\subsection{GARCH Correction}
+
+Heteroscedasticity is then corrected by a GARCH(k,m) transformation \citep{bollerslev1986generalized}:
+\begin{equation}
+\mathbf{\sigma}^{2}
+= \mathbf{GA}_{\sigma}^{-1}\,\mathbf{G}
+  \;+\;
+  \mathbf{GA}_{\sigma}^{-1}\,\mathbf{AR}_{\sigma}\,\mathbf{\varepsilon}^{2}
+\label{eq:garch_reduced}
+\end{equation}
+where $\mathbf{\sigma}^{2}$ and $\mathbf{\varepsilon}^{2}$ are $N \times T$ matrices, and $\mathbf{GA}_{\sigma}$ and $\mathbf{AR}_{\sigma}$ are $T \times T$ GARCH (long-term) and ARCH (short-term) innovation operator matrices. The long-term operator $\mathbf{GA}_{\sigma}$ is analogous to the autoregressive matrix $\mathbf{AR}$ in Equation~\ref{eq:arima_reduced}, while $\mathbf{AR}_{\sigma}$ parallels its moving-average component (see the section "A note on terminology" below for a discussion of this terminology). This conversion ensures that the non-stationary $\mathbf{u}_{RE}$ ultimately becomes the stationary $\mathbf{\varepsilon}/\mathbf{\sigma}$. The term $\mathbf{G}$ is a vector composed of ones, the initial variance, and any user-supplied exogenous variance predictors in $\mathbf{W}$.
+
+\section{The ARIMA Process}\label{the-arima-process}
+
+As mentioned earlier, $\mathbf{u}_{RE}$ is an $N \times T$ matrix of observed residuals across group and time dimensions, after correcting for random or fixed effects. These residuals are linked to the stationary, independent, and identically distributed (i.i.d.) residuals $\boldsymbol{\varepsilon}$ through an ARIMA process:
+
+\begin{equation}
+\left( \mathbf{I} - \sum_{j = 1}^{p} \rho_{j} \cdot \mathbf{L}^{j} \right) \cdot \mathbf{\Delta}_{d} \, \mathbf{u}_{RE}
+= \left( \mathbf{I} + \sum_{j = 1}^{q} \lambda_{j} \cdot \mathbf{L}^{j} \right) \cdot \boldsymbol{\varepsilon},
+\label{eq:7}
+\end{equation}
+
+where $\mathbf{L}$ is the lag operator (or lag matrix). The moving average component is defined as:
+
+\begin{equation}
+\mathbf{MA} = \mathbf{I} + \sum_{j = 1}^{q} \lambda_{j} \cdot \mathbf{L}^{j},
+\label{eq:8}
+\end{equation}
+
+and the autoregressive component is defined as:
+
+\begin{equation}
+\mathbf{AR} = \mathbf{I} - \sum_{j = 1}^{p} \rho_{j} \cdot \mathbf{L}^{j}.
+\label{eq:9}
+\end{equation}
+
+We can then rewrite Equation~\ref{eq:7} as:
+
+\begin{equation}
+\boldsymbol{\varepsilon}
+= \mathbf{MA}^{-1} \cdot \mathbf{AR} \cdot \mathbf{\Delta}_{d} \, \mathbf{u}_{RE},
+\label{eq:arima_matrix}
+\end{equation}
+
+which expresses the stationary residuals $\boldsymbol{\varepsilon}$ as a transformation of the differenced residuals $\mathbf{u}_{RE}$.
+
+\subsection*{Gradients}
+When writing down the gradients, it is convenient to define the following function
+\begin{equation}
+\mathbf{D}(n)
+= - \mathbf{MA}^{-1} \cdot [\mathbf{L}^{1}, \cdots ,\mathbf{L}^{n}]
+\label{eq:MA_func}
+\end{equation}
+The partial derivatives of $\boldsymbol{\varepsilon}$ with respect to the model parameters are:
+
+\begin{equation}
+\frac{\partial \boldsymbol{\varepsilon}}{\partial \boldsymbol{\rho}}
+= \mathbf{D}(p) \mathbf{\Delta}_{d} \, \mathbf{u}_{RE}
+\label{eq:11}
+\end{equation}
+
+\begin{equation}
+\frac{\partial \boldsymbol{\varepsilon}}{\partial \boldsymbol{\lambda}}
+= \mathbf{D}(q) \, \boldsymbol{\varepsilon}
+\label{eq:12}
+\end{equation}
+Note that, unlike the derivative with respect to $\boldsymbol{\rho}$, the derivative with respect to $\boldsymbol{\lambda}$ is taken with respect to $\boldsymbol{\varepsilon}$ itself rather than $\mathbf{\Delta}_{d}\,\mathbf{u}_{RE}$: since $\mathbf{MA}$ is inverted in Equation~\ref{eq:arima_reduced}, differentiating $\mathbf{MA}^{-1}$ with respect to $\lambda_j$ reintroduces a factor of $\mathbf{MA}^{-1}$, i.e.\ $\partial \mathbf{MA}^{-1}/\partial \lambda_j = -\mathbf{MA}^{-1}\mathbf{L}^{j}\mathbf{MA}^{-1}$, so that $\partial \boldsymbol{\varepsilon}/\partial \lambda_j = -\mathbf{MA}^{-1}\mathbf{L}^{j}\boldsymbol{\varepsilon}$.
+
+
+\begin{equation}
+\frac{\partial \boldsymbol{\varepsilon}}{\partial \boldsymbol{\beta}}
+= - \mathbf{MA}^{-1} \cdot \mathbf{AR} \cdot \mathbf{\Delta}_{d} \, \mathbf{X}_{RE}
+\label{eq:13}
+\end{equation}
+
+\subsection{The Hessians}
+
+The Hessians can now be written as
+
+\begin{equation}
+\frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\rho}' \partial \boldsymbol{\rho}}=
+\frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\beta}' \partial \boldsymbol{\beta}} =
+\frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\rho}' \partial \boldsymbol{\beta}} 
+= 0
+\label{eq:14}
+\end{equation}
+
+\begin{equation}
+\frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\lambda}' \partial \boldsymbol{\lambda}}
+= 2  \mathbf{D}(q)' \cdot \frac{\partial \boldsymbol{\varepsilon}}{\partial \boldsymbol{\lambda}}
+\label{eq:15}
+\end{equation}
+
+\begin{equation}
+\frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\lambda}' \partial \boldsymbol{\rho}}
+= \mathbf{D}(q)' \cdot \frac{\partial \boldsymbol{\varepsilon}}{\partial \boldsymbol{\rho}}
+\label{eq:16}
+\end{equation}
+\begin{equation}
+\frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\lambda}' \partial \boldsymbol{\beta}}
+= \mathbf{D}(q)' \cdot \frac{\partial \boldsymbol{\varepsilon}}{\partial \boldsymbol{\beta}}
+\label{eq:18}
+\end{equation}
+
+\begin{equation}
+\frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\rho}' \partial \boldsymbol{\beta}}
+=- \mathbf{D}(p)' \cdot \mathbf{\Delta}_{d} \, \mathbf{X}_{RE},
+\label{eq:17}
+\end{equation}
+
+
+The fixed/random effects operator is applied prior to summing over group and time dimensions.
+
+
+\section{The GARCH process}\label{the-garch-process}
+
+The underlying objective of the GARCH transformation is to model serially dependent conditional heteroskedasticity \citep{engle1982autoregressive,bollerslev1986generalized}. What is required is therefore a kernel that captures this serial dependence. Hence, the objective of GARCH is to obtain the serially correlated conditional standard deviations $\mathbf{\sigma}$ that deflate the stationarized ARIMA residuals $\mathbf{\varepsilon}$ into white noise $\mathbf{\varepsilon}/\mathbf{\sigma}$.
+
+This is, in a sense, the opposite of the objective of the ARIMA transformation, which tries to \textit{remove} serial correlation in the conditional mean.
+
+
+We shall assume a general GARCH($k,m$) process of the form
+
+\begin{equation}
+\mathbf{\sigma}^{2} = \mathbf{G} + \sum_{j = 1}^{m}{\psi_{j}\mathbf{\mathbf{L}}^{j}h\left( \mathbf{\varepsilon},z \right)} + \sum_{j = 1}^{k}{\gamma_{j} \cdot \mathbf{\mathbf{L}}^{j}\mathbf{\sigma}^{2}}
+\label{eq:19}
+\end{equation}
+For the ordinary GARCH model $h( \mathbf{\varepsilon} ) = \mathbf{\varepsilon}^{2}$, and for an EGARCH-type model \citep{nelson1991conditional} $h( \mathbf{\varepsilon} ) = \ln\left( \mathbf{\varepsilon}^{2} \right)$. In the package, the user can specify the function $h( \cdot )$, which permits substantial freedom in the specification of the variance model. The user also has the option to let $h(\cdot)$ depend on a shape parameter $z$, which is then estimated jointly with the other parameters by maximizing the log likelihood.
+
+The default \emph{h}-function is the usual GARCH model:
+
+\begin{equation}
+h( \mathbf{\varepsilon} ) = \mathbf{\varepsilon}^{2} 
+\label{eq:20}
+\end{equation}
+If a different $h( \cdot )$ is supplied, its first and second derivative with respect to $\mathbf{\varepsilon}$ and, if used, $z$, must be defined also.
+
+$\mathbf{G}$ contains variables that explain the variance given by a set of "regressors" $\mathbf{W}$ and associated parameters $\mathbf{\omega}$. In addition, it contains the initial variance $\mathbf{e}\sigma_{0}^{2}$, where $\mathbf{e}$ is an $N \times T$ matrix of zeros, with ones only in the first (non-missing) column of each row, so that $\sigma_0^2$ enters only as the variance of the first observation of each group. Hence, $\mathbf{G}$ is given by
+\begin{equation}
+\mathbf{G} = \mathbf{W}\mathbf{\omega} + \mathbf{e}\sigma_{0}^{2}
+\label{eq:24b}
+\end{equation}
+
+The equation above can be reformulated as
+
+
+\begin{equation}
+\left( 1 - \sum_{j = 1}^{k}{\gamma_{j} \cdot}\mathbf{L}^{j} \right)\mathbf{\sigma}^{2} = \mathbf{G} + \sum_{j = 1}^{m}{\psi_{j}\mathbf{\mathbf{L}}^{j}h\left( \mathbf{\varepsilon},z \right)}
+\label{eq:21}
+\end{equation}
+
+Let
+
+\begin{equation}
+\mathbf{GA}_{\sigma} =  I - \sum_{j = 1}^{k}{\gamma_{j} \cdot \mathbf{L}^{j}}
+\label{eq:22}
+\end{equation}
+
+\begin{equation}
+\mathbf{AR}_{\sigma} = \sum_{j = 1}^{m}{\psi_{j} \cdot \mathbf{L}^{j}}
+\label{eq:23}
+\end{equation}
+
+Then the closed form solution of the GARCH process in matrix notation is, similar to the ARIMA model
+\begin{equation}
+ \mathbf{\sigma}^{2}  = \mathbf{GA}_{\sigma}^{- 1}\cdot \left(\mathbf{G} +\mathbf{AR}_{\sigma} \cdot h( \mathbf{\varepsilon},z ) \right)
+\label{eq:24}
+\end{equation}
+
+\subsection{A note on terminology}
+Consistent with convention, the innovation term $h\left( \mathbf{\varepsilon},z \right)$ is called the ARCH (autoregressive conditional heteroskedasticity) component, following \citet{engle1982autoregressive}, while the term in lagged $\mathbf{\sigma}^2$ is called the GARCH (generalized ARCH) component, following the generalization of \citet{bollerslev1986generalized}.
+
+This labeling can seem counter-intuitive at first sight, because in the ARIMA model the moving-average term represents short-term shocks (innovations), while the autoregressive term reflects long-term persistence---the opposite of how the components are typically interpreted in GARCH models: the ARCH term (past squared errors) reflects immediate volatility reactions, whereas the GARCH term (past conditional variances) captures long-term volatility persistence. From this perspective, it might seem more natural to think of the ARCH term as playing the role analogous to the moving-average term in ARIMA, and the GARCH term as playing the role analogous to the autoregressive term---which is indeed the analogy we draw between $\mathbf{AR}_\sigma$ and $\mathbf{GA}_\sigma$ in Equation~\ref{eq:garch_reduced}.
+
+One possible justification for the conventional ARCH/GARCH labels is that the GARCH component is the part that is inverted when deriving the reduced-form representation of the model in Equation~\ref{eq:24}, analogous to how the autoregressive component $\mathbf{AR}$ is combined with $\mathbf{MA}^{-1}$ in the ARIMA reduced form of Equation~\ref{eq:arima_matrix}. However, the underlying variable of interest differs between the two models: in ARIMA the process is driven by innovations $\mathbf{u}$ to solve for $\mathbf{\varepsilon}$, whereas in GARCH we solve for $\mathbf{\sigma}^{2}$ itself.
+
+Nonetheless, to avoid confusion, we adhere throughout to the established GARCH nomenclature (ARCH for $\mathbf{AR}_\sigma$, GARCH for $\mathbf{GA}_\sigma$).
+
+
+\subsection{Gradients}
+When writing down the gradients, it is convenient to define the following function, analogous to $\mathbf{D}(n)$ in Equation~\ref{eq:MA_func}:
+\begin{equation}
+\mathbf{B}(n)
+= \mathbf{GA}_{\sigma}^{-1} \cdot [\mathbf{L}^{1},  \cdots , \mathbf{L}^{n}]
+\label{eq:GA_func}
+\end{equation}
+The first derivatives are then:
+\begin{equation}
+\frac{\partial \mathbf{\sigma}^{2} }{\partial\mathbf{\psi}} =\mathbf{B}(m) \cdot h( \mathbf{\varepsilon},z )
+\label{eq:26}
+\end{equation}
+\begin{equation}
+\frac{\partial \mathbf{\sigma}^{2} }{\partial\mathbf{\omega}} =  \mathbf{GA}_{\sigma}^{-1} \cdot
+\mathbf{W}
+\label{eq:27}
+\end{equation}
+\begin{equation}
+\frac{\partial \mathbf{\sigma}^{2} }{\partial\sigma_0^{2}} =\mathbf{GA}_{\sigma}^{-1} \cdot
+\mathbf{e}
+\label{eq:28}
+\end{equation}
+\begin{equation}
+\frac{\partial \mathbf{\sigma}^{2} }{\partial z} =\mathbf{GA}_{\sigma}^{-1} \mathbf{AR}_{\sigma} \cdot \frac{\partial h}{\partial z}
+\label{eq:29}
+\end{equation}
+\begin{equation}
+\frac{\partial \mathbf{\sigma}^{2} }{\partial\mathbf{\varepsilon}} = \mathbf{GA}_{\sigma}^{- 1}\cdot \mathbf{AR}_{\sigma} \cdot \frac{\partial h}{\partial \mathbf{\varepsilon}}
+\label{eq:32}
+\end{equation}
+For $\boldsymbol{\gamma}$, which enters through the inverted operator $\mathbf{GA}_{\sigma}$ itself (the GARCH counterpart of $\boldsymbol{\lambda}$ in Equation~\ref{eq:12}), differentiating $\mathbf{GA}_{\sigma}^{-1}$ reintroduces a factor of $\mathbf{GA}_{\sigma}^{-1}$, giving
+\begin{equation}
+\frac{\partial \mathbf{\sigma}^{2} }{\partial\mathbf{\gamma}} = \mathbf{B}(k)\cdot\boldsymbol{\sigma}^{2}
+\label{eq:25}
+\end{equation}
+(not $\mathbf{B}(k)\cdot(\mathbf{G}+\mathbf{AR}_{\sigma}\,h(\boldsymbol{\varepsilon},z))$: since $\boldsymbol{\sigma}^{2}=\mathbf{GA}_{\sigma}^{-1}(\mathbf{G}+\mathbf{AR}_{\sigma}h)$ already contains one factor of $\mathbf{GA}_{\sigma}^{-1}$, and this does not cancel against the $\mathbf{GA}_{\sigma}^{-1}$ inside $\mathbf{B}(k)$).
+
+\subsection{Hessians}
+The corresponding second derivatives, used in the Hessian, are
+\begin{equation}
+\frac{{\partial^{2} \mathbf{\sigma}^{2} }}{\partial\mathbf{\psi'}\partial\mathbf{\psi}} = 0
+\label{eq:38}
+\end{equation}
+\begin{equation}
+\frac{{\partial^{2} \mathbf{\sigma}^{2} }}{\partial \mathbf{\psi'} \, \partial z}
+= \mathbf{B}(m) \, h_{z}\left( \mathbf{\varepsilon}, z \right)
+\label{eq:39}
+\end{equation}
+\begin{equation}
+\frac{{\partial^{2} \mathbf{\sigma}^{2} }}{\partial\mathbf{\psi'}\partial\mathbf{\varepsilon}} = \mathbf{B}(m) \, h_{\varepsilon}\left( \mathbf{\varepsilon},z \right)
+\label{eq:40}
+\end{equation}
+\begin{equation}
+\frac{{\partial^{2} \mathbf{\sigma}^{2} }}{\partial z\,\partial z'} = \mathbf{GA}_{\sigma}^{-1}\mathbf{AR}_{\sigma}\, h_{zz}\left( \mathbf{\varepsilon},z \right)
+\label{eq:41}
+\end{equation}
+\begin{equation}
+\frac{{\partial^{2} \mathbf{\sigma}^{2} }}{\partial z\,\partial\mathbf{\varepsilon}'} = \mathbf{GA}_{\sigma}^{-1}\mathbf{AR}_{\sigma}\, h_{z\varepsilon}\left( \mathbf{\varepsilon},z \right)
+\label{eq:42}
+\end{equation}
+\begin{equation}
+\frac{{\partial^{2} \mathbf{\sigma}^{2} }}{\partial\mathbf{\varepsilon}\,\partial\mathbf{\varepsilon}'} = \mathbf{GA}_{\sigma}^{-1}\mathbf{AR}_{\sigma}\, h_{2\varepsilon}\left( \mathbf{\varepsilon},z \right)
+\label{eq:H_eps}
+\end{equation}
+All other second derivatives among $\mathbf{\psi},\mathbf{\omega},\sigma_{0}^{2}$ are zero (since $\mathbf{G}+\mathbf{AR}_{\sigma}h$ is linear in each of these).
+
+For $\boldsymbol{\gamma}$ paired with any of $\mathbf{\psi},\mathbf{\omega},\sigma_{0}^{2},z,\mathbf{\varepsilon}$, only $\mathbf{GA}_{\sigma}^{-1}$ carries $\boldsymbol{\gamma}$-dependence, and the generic notation is genuinely simpler here: writing $\zeta$ for the second parameter,
+\begin{equation}
+\frac{\partial^{2}\mathbf{\sigma}^{2}}{\partial\boldsymbol{\gamma}\,\partial\zeta'} = \mathbf{B}(k)\cdot\frac{\partial\mathbf{\sigma}^{2}}{\partial\zeta'},
+\label{eq:46}
+\end{equation}
+and for $\boldsymbol{\gamma}$ against itself, differentiating both factors of Equation~\ref{eq:25},
+\begin{equation}
+\frac{\partial^{2}\mathbf{\sigma}^{2}}{\partial\boldsymbol{\gamma}\,\partial\boldsymbol{\gamma}'} = 2\,\mathbf{B}(k)'\cdot\frac{\partial\mathbf{\sigma}^{2}}{\partial\boldsymbol{\gamma}}.
+\label{eq:34}
+\end{equation}
+
+\subsection{Derivatives with respect to the ARIMA process}
+For $\boldsymbol{\xi},\boldsymbol{\zeta}\in\{\boldsymbol{\rho},\boldsymbol{\lambda},\boldsymbol{\beta}\}$, $\mathbf{\sigma}^{2}$ depends on these parameters only through $\boldsymbol{\varepsilon}(\boldsymbol{\xi})$, so the chain rule applied to Equation~\ref{eq:32} gives
+\begin{equation}
+\frac{\partial \mathbf{\sigma}^{2} }{\partial \boldsymbol{\xi}} = \mathbf{GA}_{\sigma}^{-1}\mathbf{AR}_{\sigma}\, h_{\varepsilon}\left( \mathbf{\varepsilon}, z \right)\cdot \frac{\partial \mathbf{\varepsilon}}{\partial \boldsymbol{\xi}},
+\label{eq:43}
+\end{equation}
+and, differentiating a second time---an ordinary product rule, since $h_{\varepsilon}$ is itself a function of $\boldsymbol{\varepsilon}(\boldsymbol{\zeta})$---this genuinely benefits from the generic $\boldsymbol{\xi},\boldsymbol{\zeta}$ notation, since it unifies all six $\{\rho,\lambda,\beta\}$-pairs into one equation:
+\begin{equation}
+\frac{\partial^{2} \mathbf{\sigma}^{2} }{\partial \boldsymbol{\xi}\,\partial\boldsymbol{\zeta}'} =
+\mathbf{GA}_{\sigma}^{-1}\mathbf{AR}_{\sigma}\left[\, h_{2\varepsilon}\left( \mathbf{\varepsilon}, z \right)\cdot\frac{\partial \mathbf{\varepsilon}}{\partial \boldsymbol{\xi}}\frac{\partial \mathbf{\varepsilon}}{\partial \boldsymbol{\zeta}'} \;+\; h_{\varepsilon}\left( \mathbf{\varepsilon}, z \right)\cdot\frac{\partial^{2} \mathbf{\varepsilon}}{\partial \boldsymbol{\xi}\,\partial \boldsymbol{\zeta}'}\,\right],
+\label{eq:44}
+\end{equation}
+valid for both the diagonal ($\boldsymbol{\xi}=\boldsymbol{\zeta}$) and off-diagonal case, with $\partial^{2}\boldsymbol{\varepsilon}/\partial\boldsymbol{\xi}\,\partial\boldsymbol{\zeta}'$ given by Equations~\ref{eq:14}--\ref{eq:17} (zero except for pairs involving $\boldsymbol{\lambda}$).
+
+For an ARIMA parameter $\boldsymbol{\xi}\in\{\boldsymbol{\rho},\boldsymbol{\lambda},\boldsymbol{\beta}\}$ crossed with a GARCH-native parameter, only $\boldsymbol{\varepsilon}(\boldsymbol{\xi})$ carries the $\boldsymbol{\xi}$-dependence, so each cross term follows directly from the $\mathbf{\varepsilon}$-derivatives already given above:
+\begin{equation}
+\frac{\partial^{2}\mathbf{\sigma}^{2}}
+{\partial \boldsymbol{\xi}\,\partial\boldsymbol{\gamma}'}
+=
+\mathbf{B}(k)\cdot
+\frac{\partial\mathbf{\sigma}^{2}}{\partial\boldsymbol{\xi}},
+\tag{47a}
+\label{eq:47a}
+\end{equation}
+
+\begin{equation}
+\frac{\partial^{2}\mathbf{\sigma}^{2}}
+{\partial \boldsymbol{\xi}\,\partial\mathbf{\psi}'}
+=
+\mathbf{B}(m)\,
+h_{\varepsilon}\left(\mathbf{\varepsilon},z\right)\cdot
+\frac{\partial \mathbf{\varepsilon}}{\partial \boldsymbol{\xi}},
+\tag{47b}
+\label{eq:47b}
+\end{equation}
+
+\begin{equation}
+\frac{\partial^{2}\mathbf{\sigma}^{2}}
+{\partial \boldsymbol{\xi}\,\partial z'}
+=
+\mathbf{GA}_{\sigma}^{-1}\mathbf{AR}_{\sigma}\,
+h_{z\varepsilon}\left(\mathbf{\varepsilon},z\right)\cdot
+\frac{\partial \mathbf{\varepsilon}}{\partial \boldsymbol{\xi}},
+\tag{47c}
+\label{eq:47c}
+\end{equation}
+(note, in particular, no leading factor of 2 in the $\boldsymbol{\psi}$ case), while $\partial^{2}\mathbf{\sigma}^{2}/\partial\boldsymbol{\xi}\,\partial\mathbf{\omega}' = \partial^{2}\mathbf{\sigma}^{2}/\partial\boldsymbol{\xi}\,\partial\sigma_{0}^{2\,\prime} = 0$.
+
+Finally, the log-variance derivatives needed for the likelihood (in the section "The LL gradient" below) are worth keeping in generic form, since the same two-line identity applies uniformly to every parameter pair rather than needing to be listed separately for each:
+\begin{equation}
+\frac{\partial \ln(\mathbf{\sigma}^{2}) }{\partial\xi} = \frac{1}{\mathbf{\sigma}^{2}}\frac{\partial\mathbf{\sigma}^{2}}{\partial\xi},
+\label{eq:49}
+\end{equation}
+\begin{equation}
+\frac{\partial^{2}\ln(\boldsymbol{\sigma}^{2})}{\partial\xi\,\partial\zeta'} = \frac{1}{\boldsymbol{\sigma}^{2}}\frac{\partial^{2}\boldsymbol{\sigma}^{2}}{\partial\xi\,\partial\zeta'} - \frac{\partial\ln(\boldsymbol{\sigma}^{2})}{\partial\xi}\frac{\partial\ln(\boldsymbol{\sigma}^{2})}{\partial\zeta'}.
+\label{eq:49b}
+\end{equation}
+
+
+
+
+
+\section{Random effects}
+
+The one-way random effects model can be formulated as
+
+\begin{equation}
+\eta_{i,t} = v_{i} + \epsilon_{i,t}
+\label{eq:50}
+\end{equation}
+
+And in this package, we use the normalized residuals in the random
+effects model:
+
+\begin{equation}
+\eta_{i,t} = \frac{\varepsilon_{i,t}}{\sigma_{i,t}}
+\label{eq:51}
+\end{equation}
+
+With known parameters, but unknown group effects, the idiosyncratic
+residuals can be obtained using the Swamy--Arora-type variance-components weight \citep{swamy1972exact}:
+
+\begin{equation}
+\theta_{i} = 1 - \frac{\sigma_{\epsilon}}{\sqrt{\sigma_{\epsilon}^{2} + T_{i}\sigma_{v}^{2}}}
+\label{eq:re1}
+\end{equation}
+
+And then \citep[pp.~412--413]{greene2012econometric}, using the
+group means ${\overline{\eta}}_{i}$ to calculate
+
+\begin{equation}
+\epsilon_{i,t} = \eta_{i,t} + RE_{0}(\eta_{i,t},\theta_{i})\
+\label{eq:re2}
+\end{equation}
+
+Where the random effects function, indexed by $j \in \{0,1\}$, is
+
+\begin{equation}
+RE_{j}\left( x_{i,t},\theta_{i} \right) = j \cdot x_{i,t} + \theta_{i}\left( \overline{x} - {\overline{x}}_{i} \right)
+\label{eq:re3}
+\end{equation}
+(note that the subscript $j$ here denotes the weight on $x_{i,t}$ itself, and should not be confused with the group index $i$),
+and ${\overline{x}}_{i}$ are the group means of $x_{i,t}$ and
+$\overline{x}$ the mean of ${\overline{x}}_{i}$, ensuring a centered
+effect. $\sigma_{\epsilon}^{2}$ is estimated as
+
+\begin{equation}{\widehat{\sigma}}_{\epsilon}^{2} = \frac{1}{1 - \overline{1/T}}\frac{1}{N\sum_{}^{}T_{i}}\sum_{i = 0}^{N}{\sum_{t = 0}^{T_{i}}\left( RE_{1}\left( \eta_{i,t},1 \right) \right)^{2}}
+\label{eq:re4}
+\end{equation}
+
+Where
+
+\begin{equation}
+\overline{1/T} = \frac{1}{N}\sum_{i = 0}^{N}\frac{1}{T}
+\label{eq:re5}
+\end{equation}
+
+And $\sigma_{v}^{2}$ is estimated as:
+
+\begin{equation}
+{\widehat{\sigma}}_{v}^{2} = \frac{1}{N\sum_{}^{}T_{i}}\sum_{i = 1}^{N}{\sum_{t = 0}^{T_{i}}\eta_{i,t}^{2}}
+\label{eq:re6}
+\end{equation}
+
+The $\theta_{i}$ derivatives are
+
+\begin{equation}
+\frac{\partial\theta_{i}}{\partial\sigma_{v}^{2}} = \frac{1}{2}\frac{T_{i}}{\sigma_{\epsilon}^{2}}\left( 1 - \theta_{i} \right)^{3}
+\label{eq:re7}
+\end{equation}
+
+\begin{equation}
+\frac{\partial\theta_{i}}{\partial\sigma_{\epsilon}^{2}} = - \frac{1}{2}\frac{1}{\sigma_{\epsilon}^{2}}\left( 1 - \theta_{i} \right)\theta_{i}\left( 2 - \theta_{i} \right)
+\label{eq:re7b}
+\end{equation}
+
+\begin{equation}
+\frac{\partial^{2}\theta_{i}}{{\partial\left( \sigma_{\epsilon}^{2} \right)}^{2}} = - \frac{\partial\theta_{i}}{\partial\sigma_{\epsilon}^{2}}\frac{1}{2}\frac{4 - 3\left( 2 - \theta_{i} \right)\theta_{i}}{\sigma_{\epsilon}^{2}}
+\label{eq:re8}
+\end{equation}
+
+\begin{equation}
+\frac{\partial\theta_{i}}{\partial\left( \sigma_{v}^{2} \right)^{2}} = - \frac{3}{4}\frac{T_{i}^{2}}{\left( \sigma_{\epsilon}^{2} \right)^{2}}\left( 1 - \theta_{i} \right)^{5}
+\label{eq:re9}
+\end{equation}
+
+\begin{equation}\frac{\partial\theta_{i}}{\partial\sigma_{v}^{2}\partial\sigma_{\epsilon}^{2}} = - \frac{\partial\epsilon_{i,t}}{\partial\sigma_{v}^{2}}\frac{1}{2}\frac{3\left( \theta_{i} - 2 \right)\theta_{i} - 2}{\sigma_{\epsilon}^{2}}
+\label{eq:re10}
+\end{equation}
+
+Now, for any parameter $h$ that affects the original residuals, the
+marginal effect on the random effect residuals (recall Equation~\ref{eq:re2}) is
+
+\begin{align}
+\frac{\partial \epsilon_{i,t}}{\partial h} 
+= {} & \frac{\partial \eta_{i,t}}{\partial h} 
++ \widehat{\theta}_{i} \left( \frac{\partial \overline{\eta}}{\partial h} 
+- \frac{\partial \overline{\eta}_{i}}{\partial h} \right) 
++ \frac{\partial \widehat{\theta}_{i}}{\partial h} 
+\left( \overline{\eta} - \overline{\eta}_{i} \right) \nonumber \\
+= {} & \frac{\partial \eta_{i,t}}{\partial h} 
++ RE_{0} \left( \frac{\partial \eta_{i,t}}{\partial h}, \widehat{\theta}_{i} \right) 
++ RE_{0} \left( \eta_{i,t}, \frac{\partial \widehat{\theta}_{i}}{\partial h} \right)
+\label{eq:re12}
+\end{align}
+
+
+Where
+
+\begin{equation}
+\frac{\partial{\widehat{\theta}}_{i}}{\partial h} = - \frac{1}{2}\sqrt{\frac{1}{{\widehat{\sigma}}_{\epsilon}^{2}{\widehat{\sigma}}_{z}^{2}\left( T_{i} - 1 \right)}}\frac{\partial{\widehat{\sigma}}_{\epsilon}^{2}}{\partial h}
+\label{eq:re13}
+\end{equation}
+
+\begin{align}
+\frac{\partial \widehat{\sigma}_{\epsilon}^{2}}{\partial h} 
+= {} & 2 \sum_{i = 1}^{N} \sum_{t = 1}^{T} 
+RE_{1}\left( \eta_{i,t}, 1 \right) \left( 
+\frac{\partial \eta_{i,t}}{\partial h} 
++ \frac{1}{NT} \sum_{i=1}^{N} \sum_{t = 1}^{T} \frac{\partial \eta_{i,t}}{\partial h} 
+- \frac{1}{T_{i}} \sum_{t = 1}^{T_{i}} \frac{\partial \eta_{i,t}}{\partial h} 
+\right) \nonumber \\
+= {} & \sum_{i = 1}^{N} \sum_{t = 1}^{T} 
+RE_{1}\left( \eta_{i,t}, 1 \right) 
+RE_{1}\left( \frac{\partial \eta_{i,t}}{\partial h}, 1 \right)
+\label{eq:re14}
+\end{align}
+
+And the second derivative with respect to $h$ and $g$ is
+
+\begin{equation}
+\frac{\partial^{2}\epsilon_{i,t}}{\partial g\partial h} = {\widehat{\theta}}_{i}\left( \frac{\partial^{2}\overline{\varepsilon}}{\partial h\partial g} - \frac{\partial^{2}{\overline{\varepsilon}}_{i}}{\partial h\partial g} \right) - \frac{\partial{\widehat{\theta}}_{i}}{\partial h}\frac{\partial{\overline{\varepsilon}}_{i}}{\partial g} - \frac{\partial{\widehat{\theta}}_{i}}{\partial g}\frac{\partial{\overline{\varepsilon}}_{i}}{\partial h} - \frac{\partial^{2}{\widehat{\theta}}_{i}}{\partial h\partial g}{\overline{\varepsilon}}_{i}
+\label{eq:re15}
+\end{equation}
+
+\begin{align}
+\frac{\partial^{2} \epsilon_{i,t}}{\partial g \, \partial h} = {} & 
+\frac{\partial^{2} \eta_{i,t}}{\partial g \, \partial h} 
++ RE_{0} \left( \frac{\partial^{2} \eta_{i,t}}{\partial g \, \partial h}, \widehat{\theta}_{i} \right) 
++ RE_{0} \left( \frac{\partial \eta_{i,t}}{\partial g}, \frac{\partial \widehat{\theta}_{i}}{\partial h} \right) \nonumber \\
+& + RE_{0} \left( \frac{\partial \eta_{i,t}}{\partial h}, \frac{\partial \widehat{\theta}_{i}}{\partial g} \right) 
++ RE_{0} \left( \eta_{i,t}, \frac{\partial^{2} \widehat{\theta}_{i}}{\partial h \, \partial g} \right)
+\label{eq:re16}
+\end{align}
+
+
+Where
+
+\begin{equation}
+\frac{\partial^{2}{\widehat{\theta}}_{i}}{\partial h\partial g} = \sqrt{\frac{1}{{\widehat{\sigma}}_{\epsilon}^{2}{\widehat{\sigma}}_{z}^{2}\left( T_{i} - 1 \right)}}\left( \frac{1}{4}\frac{1}{{\widehat{\sigma}}_{\epsilon}^{2}}\frac{\partial{\widehat{\sigma}}_{\epsilon}^{2}}{\partial h}\frac{\partial{\widehat{\sigma}}_{\epsilon}^{2}}{\partial g} - \frac{1}{2}\frac{\partial^{2}{\widehat{\sigma}}_{\epsilon}^{2}}{\partial h\partial g} \right)
+\label{eq:re17}
+\end{equation}
+
+\begin{align}
+\frac{\partial^{2} \widehat{\sigma}_{\epsilon}^{2}}{\partial h \, \partial g} = {} & 
+2 \sum_{i = 1}^{N} \sum_{t = 1}^{T} 
+RE_{1} \left( \frac{\partial \eta_{i,t}}{\partial h}, 1 \right) 
+RE_{1} \left( \frac{\partial \eta_{i,t}}{\partial g}, 1 \right) \nonumber \\
+& + 2 \sum_{i = 1}^{N} \sum_{t = 1}^{T} 
+RE_{1} \left( \eta_{i,t}, 1 \right) 
+RE_{1} \left( \frac{\partial^{2} \widehat{\theta}_{i}}{\partial h \, \partial g}, 1 \right)
+\label{eq:re18}
+\end{align}
+
+\section{The LL gradient}\label{the-ll-gradient}
+
+Given the normal distribution in Equation~\ref{eq:normal_pdf}, it follows that the log-likelihood contribution of group $i$, summed over its $T_i$ time periods, is
+
+\begin{equation}
+{LL}_{i} = - \frac{1}{2}\ln(2\pi) \cdot T_i - \frac{1}{2}\mathbf{1}^{'}\left(\ln\left(\mathbf{\sigma}_{i,t}^{2} \right)+\frac{{\mathbf{\epsilon}_{i,t}^{2}}}{\mathbf{\sigma}_{i,t}^{2}}\right)
+\label{eq:52}
+\end{equation}
+
+so that, pointwise in $t$,
+
+\begin{equation}
+\frac{\partial LL}{\partial\epsilon_{i,t}} = - \frac{{\mathbf{\epsilon}_{i,t}}}{\mathbf{\sigma}_{i,t}^{2}}
+\label{eq:55}
+\end{equation}
+
+and
+
+\begin{equation}
+\frac{\partial LL}{\partial\ln\left(\mathbf{\sigma}_{i,t}^{2}\right)} = - \frac{1}{2}\left(1-\frac{{\mathbf{\epsilon}_{i,t}^{2}}}{\mathbf{\sigma}_{i,t}^{2}}\right)
+\label{eq:56}
+\end{equation}
+
+
+\begin{equation}
+\frac{\partial LL}{\partial\mathbf{\xi}} = \mathbf{1}^{'}\left(\frac{dLL}{d\epsilon_{i,t}}\frac{\partial\epsilon_{i,t}}{\partial\mathbf{\xi}} + \frac{\partial LL}{{\partial ln}\left( \sigma_{i,t}^{2} \right)}\frac{{\partial ln}\left( \mathbf{\sigma}_{i,t}^{2} \right)}{\partial\mathbf{\xi}} \right)
+\label{eq:57}
+\end{equation}
+
+For
+$\mathbf{\xi} \in \left\{ \mathbf{\beta}\mathbf{,}\mathbf{\rho}\mathbf{,}\mathbf{\lambda}\mathbf{,}\mathbf{\gamma}\mathbf{,}\mathbf{\psi}\mathbf{,}\mathbf{\omega}\mathbf{,}z \right\}$.
+The first term is zero for
+$\mathbf{\xi} \in \left\{ \mathbf{\psi,\omega,}z \right\}$ since
+these parameters do not affect the residuals.
+
+
+
+\section{The Hessian}\label{the-hessian}
+
+
+
+\begin{equation}
+\frac{\partial^{2}dLL}{\partial\mathbf{\varepsilon}_{i}^{2}}=
+- \mathbf{1}'\frac{1}{\mathbf{\sigma}_{i}^{2}}
+\label{eq:H1}
+\end{equation}
+
+
+\begin{equation}
+\frac{\partial^{2}dLL}{{\partial ln}\left( \mathbf{\sigma}_{i}^{2} \right)\partial\mathbf{\varepsilon}_{i}} = \mathbf{1}'\frac{\mathbf{\epsilon}_{i}}{\mathbf{\sigma}_{i}^{2}}
+\label{eq:H2}
+\end{equation}
+
+
+\begin{equation}\frac{\partial^{2}dLL}{{\partial ln}\left( \mathbf{\sigma}_{i}^{2} \right)^{2}} = - \frac{1}{2}\frac{{\mathbf{\epsilon}_{i}}^{2}}{\mathbf{\sigma}_{i}^{2}}
+\label{eq:H3}
+\end{equation}
+
+
+
+
+For parameter $\mathbf{\xi}$ and $\mathbf{\zeta}$, the corresponding hessian elements are
+
+
+\begin{align}
+\frac{\partial^{2} dLL}{\partial \boldsymbol{\xi} \, \partial \boldsymbol{\zeta}'} = {} & 
+\mathbf{1}' \Bigg(
+\frac{\partial^{2} LL}{\partial \boldsymbol{\epsilon}_{i}^{2}} 
+\cdot \frac{\partial \boldsymbol{\epsilon}_{i}}{\partial \boldsymbol{\xi}} 
+\cdot \frac{\partial \boldsymbol{\epsilon}_{i}}{\partial \boldsymbol{\zeta}'} \nonumber \\
+& + \frac{\partial^{2} dLL}{\partial \ln\left( \boldsymbol{\sigma}_{i}^{2} \right) \, \partial \boldsymbol{\epsilon}_{i}} 
+\cdot \left(
+\frac{\partial \boldsymbol{\epsilon}_{i}}{\partial \boldsymbol{\xi}} 
+\cdot \frac{\partial \ln\left( \boldsymbol{\sigma}_{i}^{2} \right)}{\partial \boldsymbol{\zeta}'} 
++ \frac{\partial \ln\left( \boldsymbol{\sigma}_{i}^{2} \right)}{\partial \boldsymbol{\xi}} 
+\cdot \frac{\partial \boldsymbol{\epsilon}_{i}}{\partial \boldsymbol{\zeta}'} 
+\right) \nonumber \\
+& + \frac{\partial^{2} dLL}{\partial \ln\left( \boldsymbol{\sigma}_{i}^{2} \right)^{2}} 
+\cdot \frac{\partial \ln\left( \boldsymbol{\sigma}_{i}^{2} \right)}{\partial \boldsymbol{\xi}} 
+\cdot \frac{\partial \ln\left( \boldsymbol{\sigma}_{i}^{2} \right)}{\partial \boldsymbol{\zeta}'} \nonumber \\
+& + \frac{\partial LL}{\partial \boldsymbol{\epsilon}_{i}} 
+\cdot \frac{\partial^{2} \boldsymbol{\epsilon}_{i}}{\partial \boldsymbol{\xi} \, \partial \boldsymbol{\zeta}'} 
++ \frac{\partial LL}{\partial \ln\left( \boldsymbol{\sigma}_{i}^{2} \right)} 
+\cdot \frac{\partial^{2} \ln\left( \boldsymbol{\sigma}_{i}^{2} \right)}{\partial \boldsymbol{\xi} \, \partial \boldsymbol{\zeta}'} 
+\Bigg)
+\label{eq:H4}
+\end{align}
+
+
+Where $\frac{\partial\mathbf{\varepsilon}_{i}}{\partial\mathbf{\xi}} = \frac{\partial^{2}\mathbf{\varepsilon}_{i}}{\partial\mathbf{\xi}\partial\mathbf{\zeta'}} = 0$ for $\mathbf{\gamma,\ \psi}$ and $\mathbf{\omega}$. The hessian is
+then
+
+
+\begin{tabular}{llllllllll}
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\beta} \, \partial \boldsymbol{\beta}'}$ & \\
+
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\rho} \, \partial \boldsymbol{\beta}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\rho} \, \partial \boldsymbol{\rho}'}$ & & & & & & & \\
+
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\lambda} \, \partial \boldsymbol{\beta}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\lambda} \, \partial \boldsymbol{\rho}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\lambda} \, \partial \boldsymbol{\lambda}'}$ & & & & & & & \\
+
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\gamma} \, \partial \boldsymbol{\beta}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\gamma} \, \partial \boldsymbol{\rho}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\gamma} \, \partial \boldsymbol{\lambda}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\gamma} \, \partial \boldsymbol{\gamma}'}$ & & & & & & \\
+
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\psi} \, \partial \boldsymbol{\beta}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\psi} \, \partial \boldsymbol{\rho}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\psi} \, \partial \boldsymbol{\lambda}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\psi} \, \partial \boldsymbol{\gamma}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\psi} \, \partial \boldsymbol{\psi}'}$ & & & & & \\
+
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\omega} \, \partial \boldsymbol{\beta}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\omega} \, \partial \boldsymbol{\rho}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\omega} \, \partial \boldsymbol{\lambda}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\omega} \, \partial \boldsymbol{\gamma}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\omega} \, \partial \boldsymbol{\psi}'}$ &
+$\frac{\partial^{2} LL}{\partial \boldsymbol{\omega} \, \partial \boldsymbol{\omega}'}$ & & & & \\
+
+$\frac{\partial^{2} LL}{\partial z \, \partial \boldsymbol{\beta}'}$ &
+$\frac{\partial^{2} LL}{\partial z \, \partial \boldsymbol{\rho}'}$ &
+$\frac{\partial^{2} LL}{\partial z \, \partial \boldsymbol{\lambda}'}$ &
+$\frac{\partial^{2} LL}{\partial z \, \partial \boldsymbol{\gamma}'}$ &
+$\frac{\partial^{2} LL}{\partial z \, \partial \boldsymbol{\psi}'}$ &
+$\frac{\partial^{2} LL}{\partial z \, \partial \boldsymbol{\omega}'}$ &
+$\frac{\partial^{2} LL}{\partial z \partial z'}$ & & \\
+
+
+\end{tabular}
+
+
+
+\section{Extensions}
+
+\subsection{Tobit model}\label{tobit-model}
+
+For censored observations, i.e.\ where the underlying, unobserved dependent variable lies beyond a threshold \citep{tobin1958estimation,amemiya1973regression}, the contribution to the likelihood is given by the normal cumulative distribution function evaluated at the threshold,
+
+\begin{equation}
+F\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) = \int_{- \infty}^{\epsilon_{i,t}/\sigma_{i,t}}{\frac{1}{\sqrt{2\pi}}\exp\left( - \frac{1}{2}\varepsilon^{2} \right)d\varepsilon}
+\label{eq:censored}
+\end{equation}
+
+where $\epsilon_{i,t}$ is the residual evaluated at the censoring threshold. Let
+$\gamma$ indicate the type of threshold, with $\gamma = 1$ for a
+lower threshold as above, and $\gamma = - 1$ for an upper threshold. Then
+
+\begin{equation}
+\frac{\partial\ln\left( F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) \right)}{\partial\epsilon_{i,t}} = \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{1}{\sigma_{i,t}}
+\label{eq:tobit_deriv1}
+\end{equation}
+
+\begin{equation}\ \frac{\partial\ln\left( F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) \right)}{\partial\ln\sigma_{i,t}} = - \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{\epsilon_{i,t}}{\sigma_{i,t}}
+\label{eq:tobit_deriv2}
+\end{equation}
+
+\begin{equation}\frac{\partial^{2}\ln\left( F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) \right)}{\partial\epsilon_{i,t}^{2}} = - \left( \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{\epsilon_{i,t}}{\sigma_{i,t}^{3}} + \frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}\frac{1}{\sigma_{i,t}^{2}} \right)
+\label{eq:tobit_deriv3}
+\end{equation}
+
+\begin{equation}\ \frac{\partial^{2}\ln\left( F\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) \right)}{\partial\epsilon_{i,t}\partial\ln\sigma_{i,t}} = \frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}\frac{\epsilon_{i,t}}{\sigma_{i,t}^{2}} + \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{\epsilon_{i,t}^{2}}{\sigma_{i,t}^{3}} - \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{1}{\sigma_{i,t}}
+\label{eq:tobit_deriv4}
+\end{equation}
+
+\begin{equation}\frac{\partial^{2}\ln\left( F\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) \right)}{\partial\ln\sigma_{i,t}^{2}} = - \frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}\frac{\epsilon_{i,t}^{2}}{\sigma_{i,t}^{2}} - \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{\epsilon_{i,t}^{3}}{\sigma_{i,t}^{3}} + \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{\epsilon_{i,t}}{\sigma_{i,t}}
+\label{eq:tobit_deriv5}
+\end{equation}
+
+
+
+\subsection{Instrumental variables}\label{instrumental-variables}
+
+If instrumental variables $\mathbf{Z}_{m}$ are supplied for equation
+\emph{m}, the package follows the standard two-stage least squares approach \citep{theil1953repeated,basmann1957generalized}: $\mathbf{X}_{m}$ is replaced by its projection onto the instrument space,
+
+
+\begin{equation}
+\mathbf{X}_{m} = \mathbf{Z}_{m}\left( \mathbf{Z}_{m}^{'}\mathbf{Z}_{m} \right)^{- 1}\mathbf{Z}_{m}^{'}{\check{\mathbf{X}}}_{m}
+\label{eq:instrumental}
+\end{equation}
+
+where ${\check{\mathbf{X}}}_{m}$ is the supplied (potentially endogenous) matrix of independent
+variables, and the right-hand side is its vector of fitted values from a first-stage regression on $\mathbf{Z}_m$. The remainder of the estimation then proceeds with $\mathbf{X}_m$ in place of $\check{\mathbf{X}}_m$.
+
+\printbibliography
+\end{document}

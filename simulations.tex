@@ -1,0 +1,359 @@
+\documentclass{article}
+
+% Encoding and font handling
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp}
+  \usepackage{lmodern}
+\else
+  \usepackage{unicode-math}
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+
+% Math and color
+\usepackage{amsmath, amssymb}
+\usepackage{xcolor}
+
+% Bibliography
+\usepackage[
+  backend=biber,
+  style=authoryear,
+  natbib=true
+]{biblatex}
+\addbibresource{literature.bib}
+
+% Paragraph spacing and indentation
+\usepackage{parskip} % if available, otherwise fall back to manual
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt plus 2pt minus 1pt}
+
+% Tables and layout
+\usepackage{longtable, booktabs, array, calc}
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+
+% Footnotes in tables
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+
+% Links and URLs
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{}
+\urlstyle{same}
+\usepackage{hyperref}
+\hypersetup{
+  hidelinks,
+  pdfcreator={LaTeX via custom preamble}
+}
+
+% Microtype if available
+\IfFileExists{microtype.sty}{
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath}
+}{}
+
+% Misc
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\setlength{\emergencystretch}{3em}
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+\author{}
+\date{}
+
+\begin{document}
+
+
+
+\section{Simulation}\label{simulation}
+
+We start with generating the residuals after random effects/fixed
+effects (RE/FE)
+
+
+
+  
+
+\begin{equation}\mathbf{\varepsilon}_{RE}\sim N(1,0)
+\label{eq:auto_1}
+\end{equation}
+
+
+From this, given GARCH parameters, we can generate volatilities
+
+\[\mathbf{\sigma}^{2} = \exp\left( G\mathbf{+}\mathbf{GA}_{\sigma}^{- 1}\mathbf{AR}_{\sigma}h\left( \mathbf{\varepsilon}_{RE},c \right) \right)\]
+
+And we generate residuals before (RE/FE)
+
+
+
+  
+
+\begin{equation}\mathbf{\varepsilon} = \mathbf{\varepsilon}_{RE} + \mathbf{v}_{i} + \mathbf{w}_{t}
+\label{eq:auto_2}
+\end{equation}
+
+
+where
+
+
+
+  
+
+\begin{equation}\mathbf{v}_{i}\sim N(1,0), \mathbf{w}_{t}\sim N(1,0)
+\label{eq:auto_3}
+\end{equation}
+
+
+From this, the observed residuals $\mathbf{u}$ are constructed, given
+an ARIMA structure:
+
+
+
+  
+
+\begin{equation}
+\mathbf{u = A}\mathbf{R}^{- 1}\mathbf{MA \cdot}\mathbf{\varepsilon}
+\label{eq:68}
+\end{equation}
+
+
+Exogenous variables $\mathbf{X}$ are then generated, where the first
+column $\mathbf{X}_{0}\mathbf{= 1}$ and the second column
+
+\[\mathbf{X}_{1}\mathbf{\sim}N(1,0)\mathbf{\ }\]
+
+Assume a normal distribution:
+
+
+
+  
+
+\begin{equation}
+f\left( \epsilon_{i,t},\sigma \right) = \frac{1}{\sqrt{2\pi\sigma_{i,t}^{2}}}\exp\left( - \frac{1}{2}\frac{\varepsilon_{i,t}}{\sigma_{i,t}^{2}} \right)
+\label{eq:69}
+\end{equation}
+
+
+Where $\varepsilon_{i,t}\ $are residuals after ARIMA and Random
+Effects adjustments and $\exp( \cdot )$ is the exponential function.
+$\sigma_{i,t}^{2}$ is the EGARCH variance process. The raw
+non-stationary residuals are
+
+
+
+  
+
+\begin{equation}
+\mathbf{u} = \mathbf{y} - \mathbf{X\beta}
+\label{eq:70}
+\end{equation}
+
+
+Where $\mathbf{u}$ is a matrix of the ARIMA process $u_{i,t}$,
+with dimensions $T \times N$ for a maximum of $T$ dates and $N$
+groups. $\mathbf{y}$ is the dependent variable, $\mathbf{X}$ the
+matrix of independents and $\mathbf{X\beta}$ the predicted vector.
+$\mathbf{X}$ is a three dimensional matrix with dimension
+$T \times N \times k$ for $k$ independent variables.
+
+The process is ARMA stationary by the operation:
+
+
+
+  
+
+\begin{equation}
+\mathbf{\varepsilon} = \mathbf{MA}^{- 1} \cdot \mathbf{AR \cdot u}
+\label{eq:71}
+\end{equation}
+
+
+where $\mathbf{\varepsilon}$ is also a $T \times N$ matrix. It is
+also allowed that the fixed and random effects occur on the residuals
+\emph{before} ARMA transformation, but the consequences of this will be
+discussed later.
+
+$\mathbf{\varepsilon}$ may have have fixed/random effects across time
+and group:
+
+
+
+  
+
+\begin{equation}\mathbf{\varepsilon} = \mathbf{\epsilon} + \mathbf{v}_{i} + \mathbf{w}_{t}
+\label{eq:auto_4}
+\end{equation}
+
+
+Where $\mathbf{v}_{i}$ and $\mathbf{w}_{t}$ are fixed and random
+effects vectors across group and time respectively, with dimensions
+$T \times N$. The residuals before fixed/random effects are then
+
+Residuals after fixed/random effects $\epsilon_{RE,i,t}$ have
+time-varying variance that follows an EGARCH process. The EGARCH process
+is a function of residuals before random effects:
+
+
+
+  
+
+\begin{equation}\mathbf{\sigma}^{2} = \exp\left( G\mathbf{+}\mathbf{GA}_{\sigma}^{- 1}\mathbf{AR}_{\sigma}h\left( \mathbf{\varepsilon}_{RE},c \right) \right)
+\label{eq:auto_5}
+\end{equation}
+
+
+\section{Old Simulation}\label{old-simulation}
+
+The random state variables in this system are
+
+\begin{itemize}
+\item
+  the independent variables
+\item
+  the residuals
+\end{itemize}
+
+Hence a simulation will start by drawing these variables from a normal
+distribution.
+
+\subsection{Single equation
+simulation:}\label{single-equation-simulation}
+
+It is well known that residual in time series data are often not normal.
+In particular this is prevalent in financial and price data, where the
+actual distribution often has ``fat tails'', or kurtosis as it is
+called. One possible explanation that can generate excess kurtosis is
+that the variance is not constant. GARCH is an attempt to model exactly
+this. In the simulation function, it will be assumed that it is in deed
+the GARCH process that generates kurtosis.
+
+Therefore the standardized residuals
+$RE\left( \mathbf{\varepsilon}_{i,t} \right)/\mathbf{\sigma}_{\mathbf{i,t}}$
+for firm \emph{i} in the log likelihood function \textbf{Error!
+Reference source not found.} will be assumed to be normal, and we define
+these as the residual random state variables. Hence, the residuals for
+all groups will be generated by drawing each element of a \emph{M} x
+\emph{1} vector $\check{\mathbf{\varepsilon}}$ from the standard
+normal distribution. We split this vector into \emph{N} groups, where
+${\check{\mathbf{\varepsilon}}}_{i}$ represent the standard normal
+draws for group \emph{i}.
+
+These standard normal residuals then generates \emph{N} sets of normally
+distributed residuals with \emph{random effects}. For each group
+\emph{i}, the non standard random effect residual vector is then
+
+
+
+  
+
+$\mathbf{\varepsilon}_{\mathbf{i,t}}\mathbf{=}\left( {\check{\mathbf{\varepsilon}}}_{i,t}\mathbf{\sigma}_{i,t}\mathbf{+}\mu_{i}\mathbf{+}\gamma_{t} \right)$ ((74) \\
+
+
+where $\mu_{i}$ and $\gamma_{t}$ are random effects drawn from a
+standard normal distribution for each group and $\mathbf{\sigma}_{i}$
+is generated by a E-GARCH process. Hence, the generated standard normal
+residuals ${\check{\mathbf{\varepsilon}}}_{i}$ for group \emph{i} are
+
+
+
+  
+
+${\check{\mathbf{\varepsilon}}}_{i} = \frac{RE\left( \mathbf{\varepsilon}_{\mathbf{i}} \right)}{\mathbf{\sigma}_{i}} = \frac{\left( \mathbf{\varepsilon}_{\mathbf{i}}\mathbf{-}u_{i} \right)}{\mathbf{\sigma}_{i}}$ ((75) \\
+
+
+consistent with the model \textbf{Error! Reference source not found.}.
+The problem is that the variance process $\mathbf{\sigma}_{i}$ in (74)
+depends on $\mathbf{\varepsilon}_{\mathbf{i}}$, which again depends on
+the variance process $\mathbf{\sigma}_{i}$.
+
+Let us start with the variance process. It follows from \textbf{Error!
+Reference source not found.}, (20) and (24) in the E-GARCH model
+(section 4) that
+
+
+
+  
+
+\begin{equation}
+\ln\left( \mathbf{\sigma}_{i}^{2} \right) = \mathbf{W}_{i}\mathbf{\omega}^{\mathbf{'}}\mathbf{+}\left( \mu\frac{1}{T_{i}}\mathbf{1}\mathbf{1}^{\mathbf{'}}\mathbf{+}{AR}_{\sigma}^{- 1}MA_{\sigma} \right)\ln\left( \mathbf{\varepsilon}_{i}^{2} + c \right)
+\label{eq:76}
+\end{equation}
+
+
+Inserting (74) yields
+
+
+
+  
+
+\begin{equation}
+\ln\left( \mathbf{\sigma}_{i}^{2} \right) = \mathbf{W}_{i}\mathbf{\omega}^{\mathbf{'}}\mathbf{+}\left( \mu\frac{1}{T_{i}}\mathbf{1}\mathbf{1}^{\mathbf{'}}\mathbf{+}{AR}_{\sigma}^{- 1}MA_{\sigma} \right)\ln\left( \left( {\check{\mathbf{\varepsilon}}}_{i}\mathbf{\sigma}_{i}\mathbf{+}u_{i} \right)^{2} + c \right)
+\label{eq:77}
+\end{equation}
+
+
+It is not possible to solve this with respect to
+$\mathbf{\sigma}_{i}$, unless we do some simplifying assumtions.
+$\ln\left( \left( {\check{\mathbf{\varepsilon}}}_{i}\mathbf{\sigma}_{i}\mathbf{+}u_{i} \right)^{2} + c \right)$
+
+Since $\mathbf{\varepsilon}_{i}^{2}$ are the residuals resulting from
+applying the ARIMA filter (section 3) on observed residuals
+
+Define the standardized residuals
+
+\[{\overline{\mathbf{\varepsilon}}}_{j,i}^{2} = \frac{RE\left( \mathbf{\varepsilon}_{i}^{2} \right)}{\mathbf{\sigma}_{i}^{2}}\]
+
+I will assume that these residuals are random noise with standard normal
+distribution. As before $RE\left( \mathbf{\cdot} \right)$ represents
+the random effects transformation of the residuals. Hence, we can
+
+\[RE\left( \mathbf{\varepsilon}_{i}^{2} \right) = {\overline{\mathbf{\varepsilon}}}_{j,i}^{2}\mathbf{\sigma}_{i}^{2}\]
+
+We now need a simplifying assumption in order to write
+$\mathbf{\sigma}_{i}^{2}$ as a function of the state variables
+${\overline{\mathbf{\varepsilon}}}_{j,i}^{2}$. The mathematically
+correct way to invert the random effects function
+$RE\left( \mathbf{\varepsilon}_{i}^{2} \right)$, would be $
+$\[RE\left( \mathbf{\varepsilon}_{i}^{2} \right) = {\overline{\mathbf{\varepsilon}}}_{j,i}^{2}\mathbf{\sigma}_{i}^{2}\]
+
+\[RE\left( \mathbf{\varepsilon}_{i}^{2} \right) = {\overline{\mathbf{\varepsilon}}}_{j,i}^{2}\mathbf{\sigma}_{i}^{2}\]
+
+\[\ln\left( \mathbf{\sigma}_{i}^{2} \right) = \mathbf{W}_{i}\mathbf{\omega}^{\mathbf{'}}\mathbf{+}\left( \mu\frac{1}{T_{i}}\mathbf{1}\mathbf{1}^{\mathbf{'}}\mathbf{+}{AR}_{\sigma}^{- 1}MA_{\sigma} \right)\ln\left( {\overline{\mathbf{\varepsilon}}}_{j,i}^{2}\mathbf{\sigma}_{i}^{2} + c \right)\]
+
+where ${\overline{\mathbf{\varepsilon}}}_{j,i}^{2}$ are the
+standardized residuals. In order to solve this equation, we need to
+assume \emph{c}=0:
+
+\[\ln\left( \mathbf{\sigma}_{i}^{2} \right) = \mathbf{W}_{i}\mathbf{\omega}^{\mathbf{'}}\mathbf{+}\left( \mu\frac{1}{T_{i}}\mathbf{1}\mathbf{1}^{\mathbf{'}}\mathbf{+}{AR}_{\sigma}^{- 1}MA_{\sigma} \right)\left( \ln\left( {RE}^{- 1}\left( {\overline{\mathbf{\varepsilon}}}_{j,i}^{2} \right) \right) + \ln\left( \mathbf{\sigma}_{i}^{2} \right) \right)\]
+
+Solving for $\ln\left( \mathbf{\sigma}_{i}^{2} \right)$:
+
+\[\ln\left( \mathbf{\sigma}_{i}^{2} \right) = \left( I - \left( \mu\frac{1}{T_{i}}\mathbf{1}\mathbf{1}^{\mathbf{'}}\mathbf{+}{AR}_{\sigma}^{- 1}MA_{\sigma} \right) \right)^{- 1}\left( \mathbf{W}_{i}\mathbf{\omega}^{\mathbf{'}}\mathbf{+}\left( \mu\frac{1}{T_{i}}\mathbf{1}\mathbf{1}^{\mathbf{'}}\mathbf{+}{AR}_{\sigma}^{- 1}MA_{\sigma} \right) \right)\ln\left( {RE}^{- 1}\left( {\overline{\mathbf{\varepsilon}}}_{j,i}^{2} \right) \right)\]
+
+\subsection{The independent variables}\label{the-independent-variables}
+
+The independent variables will drawn given a custom covariance matrix
+$\mathbf{\Sigma}$\textbf{,} by decomposing it as
+$\mathbf{\Sigma} = \mathbf{P'P}$. Say $\mathbf{\Sigma}$ is a
+\emph{k} x \emph{k} matrix and the total size of the sample is \emph{M}.
+If we makes \emph{k}⋅\emph{n} draws from the standard normal
+distribution and place them in the \emph{M} x \emph{k} matrix
+$\mathbf{Z}$, then we can generate a set of independent variables with
+the desired covariance structure and unity mean as
+$\mathbf{X} = \mathbf{P'}\mathbf{Z}\mathbf{+ 1}$, where \textbf{1} is
+a \emph{k} x \emph{1} vector of ones. Of course, one could easily allow
+means to be customizable, but there is difficult to see a compelling
+reason for that. The same holds for the coefficients of the independent
+variables. These are also assumed to be one in the simulation, that is
+$\mathbf{\beta = 1}$.
+\printbibliography
+\end{document}
