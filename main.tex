@@ -75,7 +75,9 @@ f\bigl(\varepsilon_{i,t}, \sigma_{i,t}\bigr)
       \frac{\varepsilon_{i,t}^{2}}{\sigma_{i,t}^{2}}\Bigr),
 \label{eq:normal_pdf}
 \end{equation}
-The term $\varepsilon_{i,t}$ denotes the residuals after adjustment for ARIMA and Random Effects (RE) or Fixed Effects (FE). These residuals correspond to group $i$, out of $N$ total groups, at time $t$, where $t$ ranges up to a maximum of $T$. The dataset may be unbalanced, meaning some groups can have fewer than $T$ observations. The function $\exp(\cdot)$ denotes the exponential function, and $\sigma_{i,t}^{2}$ is the conditional variance from a GARCH process \citep{engle1982autoregressive,bollerslev1986generalized}, specific to group $i$ at time $t$.
+The term $\varepsilon_{i,t}$ denotes the innovation after differencing (if requested), the group/time effect transformation, and the ARMA filter. These residuals correspond to group $i$, out of $N$ total groups, at sequence position $t$, where $t$ ranges up to a maximum of $T$. The dataset may be unbalanced, meaning some groups can have fewer than $T$ observations. The function $\exp(\cdot)$ denotes the exponential function, and $\sigma_{i,t}^{2}$ is the conditional variance from a GARCH process \citep{engle1982autoregressive,bollerslev1986generalized}, specific to group $i$ at time $t$.
+
+For the default Gaussian likelihood, the implementation uses $\varepsilon_{i,t}^{2}+10^{-8}$ in place of $\varepsilon_{i,t}^{2}$ in the quadratic likelihood term, and clips conditional variances to $[10^{-30},10^{30}]$ for numerical stability. These safeguards are implementation details; Equation~\ref{eq:normal_pdf} gives the statistical model.
 
 In the remainder of the documentation, we will generally refer to the matrix representation of variables. That is, instead of working with scalar forms $\varepsilon_{i,t}$ and $\sigma_{i,t}^{2}$, we use their matrix counterparts $\mathbf{\varepsilon}$ and $\boldsymbol{\sigma}^{2}$. For instance, $\mathbf{\varepsilon}$ is an $N \times T$ matrix, where the entry in row $i$ and column $t$ corresponds to $\varepsilon_{i,t}$.
 
@@ -83,39 +85,41 @@ In cases where a group has fewer than $T$ observations, its observed values are 
 
 \subsection{Observed Residuals}
 
-The raw, non-stationary observed residuals $\mathbf{u}$ are defined as:
+The regression residuals on the current panel arrays are defined as:
 \begin{equation}
 \mathbf{u}
 = \mathbf{y} - \mathbf{X} \boldsymbol{\beta},
 \label{eq:udef}
 \end{equation}
-where $\mathbf{X}$ is a three-dimensional array of shape $N \times T \times K$, representing $K$ independent variables across $N$ groups and $T$ time periods. $\boldsymbol{\beta}$ is a column vector of $K$ regression coefficients, and $\mathbf{y}$ denotes the dependent variable.
+where $\mathbf{X}$ is a three-dimensional array of shape $N \times T \times K$, containing the regressors (including the intercept column when present) across $N$ groups and $T$ within-group sequence positions. $\boldsymbol{\beta}$ is a column vector of regression coefficients, and $\mathbf{y}$ denotes the dependent variable. For $d>0$, these arrays have already undergone the differencing preprocessing described above; the first $d$ entries are zeroed and remain in the inclusion mask, while trailing padding is excluded.
 
-The primary objective of GARCH, ARIMA, and fixed- or random-effects corrections in general---and of the \texttt{paneltime} package specifically---is to transform the raw, non-stationary heterogeneous residuals $\mathbf{u}$ into uncorrelated, homoscedastic, homogeneous residuals $\boldsymbol{\varepsilon}$, and subsequently maximize the likelihood function implied by Equation~\ref{eq:normal_pdf}.
+The likelihood starts from the regression residual $\mathbf{u}=\mathbf{y}-\mathbf{X}\boldsymbol{\beta}$. When $d>0$, the panel arrays for $\mathbf{y}$ and the non-intercept regressors are differenced before this residual is formed; the intercept column is restored after differencing and the first $d$ positions of each group are set to zero. Effect corrections are then applied to $\mathbf{u}$, followed by the ARMA and GARCH recursions, and likelihood contributions are summed over observed cells.
 
-To achieve this, the package simultaneously performs three main transformations on $\mathbf{u}$: correction for random or fixed effects, an ARIMA transformation \citep{box1970time}, and a GARCH transformation \citep{engle1982autoregressive,bollerslev1986generalized}. These steps must be carried out jointly in order to ensure consistent estimation of the model parameters.
+The parameters of these transformations are estimated jointly by maximum likelihood. For unbalanced panels, rows are sorted within group and padded with zeros at the end; ARMA/GARCH lags follow that within-group observation order. Group/time effect means, in contrast, use actual group membership and the calendar-date map.
 
 
 \subsection{Random/Fixed Effects}
 
-The observed residuals are decomposed into either random (RE) or fixed (FE) effects across time and groups \citep{balestra1966pooling,wooldridge2010econometric}:
+After differencing and forming $u_{i,t}=y_{i,t}-\mathbf{x}_{i,t}'\boldsymbol{\beta}$, the implementation applies centered group and/or time quasi-demeaning corrections:
 
 \begin{equation}
 u_{RE,i,t}
-= u_{i,t} \;+\; v_{i} \;+\; w_{t},
+= u_{i,t}
+ + \theta_{g,i}\left(\bar{u}-\bar{u}_{g,i}\right)
+ + \theta_{t,t}\left(\bar{u}-\bar{u}_{t}\right),
 \label{eq:rRE_def}
 \end{equation}
-where $v_{i}$ are the group effects and $w_{t}$ are the time effects. Because FE is effectively a special case of RE, obtained in the limit as the variance of $v_i$ and $w_t$ becomes large relative to the idiosyncratic variance \citep{greene2012econometric}, the remainder of this documentation focuses on RE.
+where $\bar{u}$ is the grand mean over included observations, $\bar{u}_{g,i}$ is the mean for group $i$, and $\bar{u}_{t}$ is the mean for actual calendar date $t$. A term is omitted when that effect is \texttt{none}. For \texttt{fixed} effects its weight is one; for \texttt{random} effects the weight $\theta$ is estimated from variance components, as described in Section~\ref{sec:effects-implementation}. In the two-way case, group and time corrections are each computed from the same $u$ and added; they are not applied sequentially. The same transformation is applied to the regressor design when differentiating with respect to $\boldsymbol{\beta}$; denote that transformed design by $\mathbf{X}_{RE}$. Thus $u_{RE}$ is a transformed residual, not a residual plus separately estimated $v_i$ and $w_t$ coefficients. The RE transformation approaches FE as its estimated effect variance grows relative to the idiosyncratic variance.
 
 \subsection{ARIMA Correction}
 
 Serial dependence is removed via a Box--Jenkins ARIMA($p,d,q$) filter \citep{box1970time}:
 \begin{equation}
 \mathbf{\varepsilon}
-= \mathbf{MA}^{-1} \cdot \mathbf{AR} \cdot \mathbf{\Delta}_{d}\,\mathbf{u}_{RE},
+= \mathbf{MA}^{-1} \cdot \mathbf{AR} \cdot \mathbf{u}_{RE},
 \label{eq:arima_reduced}
 \end{equation}
-where $\mathbf{\varepsilon}$ is an $N \times T$ matrix of uncorrelated noise terms, and $\mathbf{u}_{RE}$ is the corresponding $N \times T$ matrix of observed ARIMA residuals, differenced $d$ times by the operator $\mathbf{\Delta}_{d}$. The matrices $\mathbf{MA}$ and $\mathbf{AR}$ are $T \times T$ moving average and autoregressive operators, respectively. This operation converts the non-stationary $\mathbf{u}_{RE}$ into the stationary $\mathbf{\varepsilon}$.
+where $\mathbf{u}_{RE}$ is formed from the panel inputs after differencing (if $d>0$) and the group/time effect corrections, and $\boldsymbol{\varepsilon}$ is the resulting ARMA innovation matrix. The matrices $\mathbf{MA}$ and $\mathbf{AR}$ are lower-triangular lag operators applied separately to each group row. Differencing occurs before the effect correction in the current implementation; it is not part of this subsequent ARMA equation.
 
 \subsection{GARCH Correction}
 
@@ -124,17 +128,17 @@ Heteroscedasticity is then corrected by a GARCH(k,m) transformation \citep{bolle
 \mathbf{\sigma}^{2}
 = \mathbf{GA}_{\sigma}^{-1}\,\mathbf{G}
   \;+\;
-  \mathbf{GA}_{\sigma}^{-1}\,\mathbf{AR}_{\sigma}\,\mathbf{\varepsilon}^{2}
+  \mathbf{GA}_{\sigma}^{-1}\,\mathbf{AR}_{\sigma}\,h(\mathbf{\varepsilon},z)
 \label{eq:garch_reduced}
 \end{equation}
-where $\mathbf{\sigma}^{2}$ and $\mathbf{\varepsilon}^{2}$ are $N \times T$ matrices, and $\mathbf{GA}_{\sigma}$ and $\mathbf{AR}_{\sigma}$ are $T \times T$ GARCH (long-term) and ARCH (short-term) innovation operator matrices. The long-term operator $\mathbf{GA}_{\sigma}$ is analogous to the autoregressive matrix $\mathbf{AR}$ in Equation~\ref{eq:arima_reduced}, while $\mathbf{AR}_{\sigma}$ parallels its moving-average component (see the section "A note on terminology" below for a discussion of this terminology). This conversion ensures that the non-stationary $\mathbf{u}_{RE}$ ultimately becomes the stationary $\mathbf{\varepsilon}/\mathbf{\sigma}$. The term $\mathbf{G}$ is a vector composed of ones, the initial variance, and any user-supplied exogenous variance predictors in $\mathbf{W}$.
+where $\mathbf{\sigma}^{2}$ and $h(\mathbf{\varepsilon},z)$ are $N \times T$ arrays, and $\mathbf{GA}_{\sigma}$ and $\mathbf{AR}_{\sigma}$ are $T \times T$ GARCH and ARCH lag operators. The variance-regressor design $\mathbf{W}$ includes a constant and any user-supplied variance predictors, and $\mathbf{G}=\mathbf{W}\boldsymbol{\omega}$ except at the first observation of each group, where the implementation substitutes the initial variance. That initial variance is fixed from the starting-value calculation unless \texttt{include\_initvar=True}, in which case it is an estimated parameter. Presample innovations and variances are initialized at zero. For the default Gaussian model, $h(\varepsilon)=\varepsilon^2+10^{-8}$; custom h-functions and EGARCH use their configured transformations. The likelihood uses the resulting standardized innovations, subject to the numerical variance bounds described above.
 
 \section{The ARIMA Process}\label{the-arima-process}
 
-As mentioned earlier, $\mathbf{u}_{RE}$ is an $N \times T$ matrix of observed residuals across group and time dimensions, after correcting for random or fixed effects. These residuals are linked to the stationary, independent, and identically distributed (i.i.d.) residuals $\boldsymbol{\varepsilon}$ through an ARIMA process:
+As described above, $\mathbf{u}_{RE}$ contains regression residuals after differencing (if $d>0$) and applying the group/time effect transformations. These residuals are linked to the ARMA innovations $\boldsymbol{\varepsilon}$ through:
 
 \begin{equation}
-\left( \mathbf{I} - \sum_{j = 1}^{p} \rho_{j} \cdot \mathbf{L}^{j} \right) \cdot \mathbf{\Delta}_{d} \, \mathbf{u}_{RE}
+\left( \mathbf{I} - \sum_{j = 1}^{p} \rho_{j} \cdot \mathbf{L}^{j} \right) \cdot \mathbf{u}_{RE}
 = \left( \mathbf{I} + \sum_{j = 1}^{q} \lambda_{j} \cdot \mathbf{L}^{j} \right) \cdot \boldsymbol{\varepsilon},
 \label{eq:7}
 \end{equation}
@@ -157,13 +161,15 @@ We can then rewrite Equation~\ref{eq:7} as:
 
 \begin{equation}
 \boldsymbol{\varepsilon}
-= \mathbf{MA}^{-1} \cdot \mathbf{AR} \cdot \mathbf{\Delta}_{d} \, \mathbf{u}_{RE},
+= \mathbf{MA}^{-1} \cdot \mathbf{AR} \cdot \mathbf{u}_{RE},
 \label{eq:arima_matrix}
 \end{equation}
 
-which expresses the stationary residuals $\boldsymbol{\varepsilon}$ as a transformation of the differenced residuals $\mathbf{u}_{RE}$.
+which expresses the innovations $\boldsymbol{\varepsilon}$ as a transformation of the already-differenced, effect-transformed residuals $\mathbf{u}_{RE}$.
 
 \subsection*{Gradients}
+The ARMA derivative identities below are conditional on fixed effect weights. With random effects, $\boldsymbol{\beta}$ also changes the residuals used to estimate the variance components and hence changes $\boldsymbol{\theta}$. The implementation includes these additional first- and second-order chain-rule terms through the derivatives of the effect transform; Equations~\ref{eq:13}, \ref{eq:14}, and~\ref{eq:17} alone do not describe the full random-effects derivatives.
+
 When writing down the gradients, it is convenient to define the following function
 \begin{equation}
 \mathbf{D}(n)
@@ -174,7 +180,7 @@ The partial derivatives of $\boldsymbol{\varepsilon}$ with respect to the model 
 
 \begin{equation}
 \frac{\partial \boldsymbol{\varepsilon}}{\partial \boldsymbol{\rho}}
-= \mathbf{D}(p) \mathbf{\Delta}_{d} \, \mathbf{u}_{RE}
+= \mathbf{D}(p) \, \mathbf{u}_{RE}
 \label{eq:11}
 \end{equation}
 
@@ -183,12 +189,12 @@ The partial derivatives of $\boldsymbol{\varepsilon}$ with respect to the model 
 = \mathbf{D}(q) \, \boldsymbol{\varepsilon}
 \label{eq:12}
 \end{equation}
-Note that, unlike the derivative with respect to $\boldsymbol{\rho}$, the derivative with respect to $\boldsymbol{\lambda}$ is taken with respect to $\boldsymbol{\varepsilon}$ itself rather than $\mathbf{\Delta}_{d}\,\mathbf{u}_{RE}$: since $\mathbf{MA}$ is inverted in Equation~\ref{eq:arima_reduced}, differentiating $\mathbf{MA}^{-1}$ with respect to $\lambda_j$ reintroduces a factor of $\mathbf{MA}^{-1}$, i.e.\ $\partial \mathbf{MA}^{-1}/\partial \lambda_j = -\mathbf{MA}^{-1}\mathbf{L}^{j}\mathbf{MA}^{-1}$, so that $\partial \boldsymbol{\varepsilon}/\partial \lambda_j = -\mathbf{MA}^{-1}\mathbf{L}^{j}\boldsymbol{\varepsilon}$.
+Note that the derivative with respect to $\boldsymbol{\lambda}$ is taken with respect to $\boldsymbol{\varepsilon}$ itself rather than $\mathbf{u}_{RE}$: since $\mathbf{MA}$ is inverted in Equation~\ref{eq:arima_reduced}, differentiating $\mathbf{MA}^{-1}$ with respect to $\lambda_j$ reintroduces a factor of $\mathbf{MA}^{-1}$, i.e.\ $\partial \mathbf{MA}^{-1}/\partial \lambda_j = -\mathbf{MA}^{-1}\mathbf{L}^{j}\mathbf{MA}^{-1}$, so that $\partial \boldsymbol{\varepsilon}/\partial \lambda_j = -\mathbf{MA}^{-1}\mathbf{L}^{j}\boldsymbol{\varepsilon}$.
 
 
 \begin{equation}
 \frac{\partial \boldsymbol{\varepsilon}}{\partial \boldsymbol{\beta}}
-= - \mathbf{MA}^{-1} \cdot \mathbf{AR} \cdot \mathbf{\Delta}_{d} \, \mathbf{X}_{RE}
+= - \mathbf{MA}^{-1} \cdot \mathbf{AR} \cdot \mathbf{X}_{RE}
 \label{eq:13}
 \end{equation}
 
@@ -198,11 +204,11 @@ The Hessians can now be written as
 
 \begin{equation}
 \frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\rho}' \partial \boldsymbol{\rho}}=
-\frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\beta}' \partial \boldsymbol{\beta}} =
-\frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\rho}' \partial \boldsymbol{\beta}} 
+\frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\beta}' \partial \boldsymbol{\beta}}
 = 0
 \label{eq:14}
 \end{equation}
+The mixed $\boldsymbol{\rho}$--$\boldsymbol{\beta}$ derivative is generally nonzero; it is given by Equation~\ref{eq:17}.
 
 \begin{equation}
 \frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\lambda}' \partial \boldsymbol{\lambda}}
@@ -223,7 +229,7 @@ The Hessians can now be written as
 
 \begin{equation}
 \frac{\partial^{2} \boldsymbol{\varepsilon}}{\partial \boldsymbol{\rho}' \partial \boldsymbol{\beta}}
-=- \mathbf{D}(p)' \cdot \mathbf{\Delta}_{d} \, \mathbf{X}_{RE},
+=- \mathbf{D}(p)' \cdot \mathbf{X}_{RE},
 \label{eq:17}
 \end{equation}
 
@@ -254,11 +260,15 @@ h( \mathbf{\varepsilon} ) = \mathbf{\varepsilon}^{2}
 \end{equation}
 If a different $h( \cdot )$ is supplied, its first and second derivative with respect to $\mathbf{\varepsilon}$ and, if used, $z$, must be defined also.
 
-$\mathbf{G}$ contains variables that explain the variance given by a set of "regressors" $\mathbf{W}$ and associated parameters $\mathbf{\omega}$. In addition, it contains the initial variance $\mathbf{e}\sigma_{0}^{2}$, where $\mathbf{e}$ is an $N \times T$ matrix of zeros, with ones only in the first (non-missing) column of each row, so that $\sigma_0^2$ enters only as the variance of the first observation of each group. Hence, $\mathbf{G}$ is given by
+$\mathbf{W}$ contains a variance constant and any supplied variance predictors. The initial variance replaces, rather than adds to, the variance-regressor contribution at the first included observation of each group. Writing that initial position as $t=1$ within each row,
 \begin{equation}
-\mathbf{G} = \mathbf{W}\mathbf{\omega} + \mathbf{e}\sigma_{0}^{2}
+G_{i,t}=\begin{cases}
+\sigma_{0}^{2}, & t=1,\\
+W_{i,t}\boldsymbol{\omega}, & t>1.
+\end{cases}
 \label{eq:24b}
 \end{equation}
+The initial variance is fixed at its starting value by default; \texttt{include\_}\allowbreak\texttt{initvar=True} adds it as an estimated parameter. In the recursions, presample innovations and variances are initialized at zero.
 
 The equation above can be reformulated as
 
@@ -285,6 +295,15 @@ Then the closed form solution of the GARCH process in matrix notation is, simila
  \mathbf{\sigma}^{2}  = \mathbf{GA}_{\sigma}^{- 1}\cdot \left(\mathbf{G} +\mathbf{AR}_{\sigma} \cdot h( \mathbf{\varepsilon},z ) \right)
 \label{eq:24}
 \end{equation}
+Equations~\ref{eq:19}--\ref{eq:24} use the variance scale and describe ordinary GARCH. For \texttt{vol=EGARCH}, the implementation instead recurses on the log-variance state $\boldsymbol{\ell}=\log\boldsymbol{\sigma}^{2}$:
+\begin{equation}
+\boldsymbol{\ell}
+=\mathbf{G}+\sum_{j=1}^{m}\psi_j\mathbf{L}^j\log(\boldsymbol{\varepsilon}^{2}+10^{-8})
++\sum_{j=1}^{k}\gamma_j\mathbf{L}^j\boldsymbol{\ell},
+\qquad \boldsymbol{\sigma}^{2}=\exp(\boldsymbol{\ell}).
+\label{eq:egarch-log-state}
+\end{equation}
+The Gaussian likelihood is evaluated using $\boldsymbol{\sigma}^{2}=\exp(\boldsymbol{\ell})$.
 
 \subsection{A note on terminology}
 Consistent with convention, the innovation term $h\left( \mathbf{\varepsilon},z \right)$ is called the ARCH (autoregressive conditional heteroskedasticity) component, following \citet{engle1982autoregressive}, while the term in lagged $\mathbf{\sigma}^2$ is called the GARCH (generalized ARCH) component, following the generalization of \citet{bollerslev1986generalized}.
@@ -309,15 +328,17 @@ The first derivatives are then:
 \label{eq:26}
 \end{equation}
 \begin{equation}
-\frac{\partial \mathbf{\sigma}^{2} }{\partial\mathbf{\omega}} =  \mathbf{GA}_{\sigma}^{-1} \cdot
-\mathbf{W}
+\frac{\partial \mathbf{\sigma}^{2} }{\partial\mathbf{omega}} =  \mathbf{GA}_{\sigma}^{-1} \cdot
+\mathbf{W}^{*}
 \label{eq:27}
 \end{equation}
+where $\mathbf{W}^{*}$ is $\mathbf{W}$ with its first included entry in each group row set to zero, since that entry is replaced by the initial variance.
 \begin{equation}
 \frac{\partial \mathbf{\sigma}^{2} }{\partial\sigma_0^{2}} =\mathbf{GA}_{\sigma}^{-1} \cdot
 \mathbf{e}
 \label{eq:28}
 \end{equation}
+Here $\mathbf{e}$ has ones at the first included position in each group row and zeros elsewhere; this derivative is used only when the initial variance is estimated with \texttt{include\_initvar=True}.
 \begin{equation}
 \frac{\partial \mathbf{\sigma}^{2} }{\partial z} =\mathbf{GA}_{\sigma}^{-1} \mathbf{AR}_{\sigma} \cdot \frac{\partial h}{\partial z}
 \label{eq:29}
@@ -435,17 +456,56 @@ Finally, the log-variance derivatives needed for the likelihood (in the section 
 
 
 
-\section{Random effects}
+\section{Implemented group and time effects}\label{sec:effects-implementation}
 
-The one-way random effects model can be formulated as
+The likelihood applies the effects transform to the regression residual $u$ before the ARMA filter. For an included observation, define the grand mean $\bar{u}$, the group mean $\bar{u}_{g,i}$, and the mean for its actual calendar date $\bar{u}_{t}$. The correction in Equation~\ref{eq:rRE_def} uses a separate weight for each enabled dimension. A `none' effect has weight zero, a `fixed' effect has weight one, and a `random' effect uses the estimated variance components below. The time means are formed from the date map, not from a common matrix-column position.
+
+For the two-way random-effects calculation, let $n_{g,i}=T_i$ be the number of observations in group $i$, and let $n_{t}$ be the number of groups observed at date $t$. Define
+\begin{equation}
+a_g=\frac{1}{\operatorname{mean}_i(n_{g,i})},\qquad
+a_t=\frac{1}{\operatorname{mean}_t(n_t)},\qquad
+\mu=\bar{u}.
+\label{eq:re-count-scales}
+\end{equation}
+Let $K_s$ be the number of slope regressors, excluding the intercept, and $NT$ the number of included observations. The implementation estimates the idiosyncratic variance from the two-way residual:
+\begin{equation}
+u_{w,i,t}=u_{i,t}-\bar{u}_{g,i}-\bar{u}_{t}+\mu,
+\qquad
+\widehat{\sigma}_{\epsilon}^{2}
+=\frac{\operatorname{mean}_{\mathcal O}(u_{w,i,t}^{2})}
+{1-a_g-a_t+(1-K_s)/NT}.
+\label{eq:re-two-way-evar}
+\end{equation}
+For dimension $j\in\{g,t\}$, first remove the other dimension's mean and add the grand mean; let $\bar{u}_{j,\mathrm{adj}}$ denote the resulting mean within the own dimension. Set $n_j^{\mathrm{eff}}=NTa_j$ and $d_j=\max(n_j^{\mathrm{eff}}-1-K_s,1)$. The own-dimension variance estimate is
+\begin{equation}
+\widehat{\sigma}_{v_j}^{2}
+=\max\!\left\{0,
+\frac{n_j^{\mathrm{eff}}}{d_j}
+\operatorname{mean}_{\mathcal O}\!\left[
+(\bar{u}_{j,\mathrm{adj}}-\mu)^2\right]
+-a_j\widehat{\sigma}_{\epsilon}^{2}\right\}.
+\label{eq:re-two-way-vvar}
+\end{equation}
+The quasi-demeaning weight at an observation is then
+\begin{equation}
+\theta_{j}=1-\sqrt{\frac{\widehat{\sigma}_{\epsilon}^{2}}
+{\widehat{\sigma}_{\epsilon}^{2}+n_{j}\widehat{\sigma}_{v_j}^{2}}},
+\label{eq:re-two-way-theta}
+\end{equation}
+where $n_j$ is that group's observation count for $j=g$, or that date's observed-group count for $j=t$. Negative estimated effect variances are truncated to zero, giving $\theta_j=0$. The variance components are recomputed from the current regression residuals during likelihood evaluation; they are not separate entries in the optimizer parameter vector. The current likelihood applies group and time effects to the mean residuals; the `effects.variance' setting does not add a variance-effects transform.
+
+\subsection{One-way random-effects reference (not the implementation)}
+
+For comparison, a textbook one-way random-effects model can be written as
 
 \begin{equation}
 \eta_{i,t} = v_{i} + \epsilon_{i,t}
 \label{eq:50}
 \end{equation}
 
-And in this package, we use the normalized residuals in the random
-effects model:
+The equations that follow in this subsection give a one-way Swamy--Arora-style reference model. They are not the variance-component calculation used by the current package, which is the two-way procedure in Equations~\ref{eq:re-count-scales}--\ref{eq:re-two-way-theta} and works on regression residuals before ARMA/GARCH standardization.
+
+In that one-way reference model, normalized residuals could be used as:
 
 \begin{equation}
 \eta_{i,t} = \frac{\varepsilon_{i,t}}{\sigma_{i,t}}
@@ -620,6 +680,40 @@ and
 \label{eq:56}
 \end{equation}
 
+The likelihood code exposes derivatives with respect to the variance state used by each model. For ordinary GARCH, this state is $v=\sigma^{2}$; for EGARCH, it is the log-variance $r=\ln v$. The log-variance derivatives above convert to variance derivatives as
+\begin{equation}
+\frac{\partial LL}{\partial v}=\frac{1}{v}\frac{\partial LL}{\partial r},\qquad
+\frac{\partial^{2}LL}{\partial\epsilon\,\partial v}=\frac{1}{v}\frac{\partial^{2}LL}{\partial\epsilon\,\partial r},\qquad
+\frac{\partial^{2}LL}{\partial v^{2}}=\frac{1}{v^{2}}\left(\frac{\partial^{2}LL}{\partial r^{2}}-\frac{\partial LL}{\partial r}\right).
+\label{eq:variance-logvariance-chain}
+\end{equation}
+
+\subsection{Adjusted Gaussian likelihood}
+When \texttt{GARCH\_assist} or \texttt{kurtosis\_adj} is nonzero, the implementation selects its \texttt{Hyperbolic} likelihood instead of the default Gaussian likelihood. Let $q=\epsilon^{2}+10^{-8}$, $s=\operatorname{sign}(q-v)$, $a=\texttt{GARCH\_assist}$, $k=\texttt{kurtosis\_adj}$, and let $m_v$ denote the variance-boundary mask (zero at an active bound and one in the interior). The implemented pointwise likelihood is
+\begin{equation}
+L_H=-\frac{1}{2}\ln(2\pi)-\frac{1}{2}\left[\ln v+(1-k)\frac{q}{v}+a\frac{|q-v|}{v}+\frac{k}{3}\frac{q^{2}}{v^{2}}\right].
+\label{eq:hyperbolic-ll}
+\end{equation}
+Away from the kink $q=v$, its score and Hessian entries are
+\begin{align}
+\frac{\partial L_H}{\partial\epsilon}
+&=-\frac{1}{2}\left[2(1-k)\frac{\epsilon}{v}+2as\frac{\epsilon}{v}+\frac{4k}{3}\frac{q\epsilon}{v^{2}}\right],
+\label{eq:hyperbolic-score-e}\\
+\frac{\partial L_H}{\partial v}
+&=-\frac{1}{2}m_v\left[\frac{1}{v}-(1-k)\frac{q}{v^{2}}-a\frac{s}{v}-a\frac{|q-v|}{v^{2}}-\frac{2k}{3}\frac{q^{2}}{v^{3}}\right],
+\label{eq:hyperbolic-score-v}\\
+\frac{\partial^{2}L_H}{\partial\epsilon^{2}}
+&=-\frac{1}{2}\left[\frac{2(1-k)}{v}+\frac{2as}{v}+\frac{4k}{3}\frac{q+2\epsilon^{2}}{v^{2}}\right],
+\label{eq:hyperbolic-hess-ee}\\
+\frac{\partial^{2}L_H}{\partial v\,\partial\epsilon}
+&=-\frac{1}{2}m_v\left[-2(1-k)\frac{\epsilon}{v^{2}}-2as\frac{\epsilon}{v^{2}}-\frac{8k}{3}\frac{q\epsilon}{v^{3}}\right],
+\label{eq:hyperbolic-hess-ve}\\
+\frac{\partial^{2}L_H}{\partial v^{2}}
+&=-\frac{1}{2}m_v\left[-\frac{1}{v^{2}}+2(1-k)\frac{q}{v^{3}}+2a\frac{s}{v^{2}}+2a\frac{|q-v|}{v^{3}}+2k\frac{q^{2}}{v^{4}}\right].
+\label{eq:hyperbolic-hess-vv}
+\end{align}
+At $q=v$, the absolute-value term is not differentiable; the implementation uses $\operatorname{sign}(0)=0$ there.
+
 
 \begin{equation}
 \frac{\partial LL}{\partial\mathbf{\xi}} = \mathbf{1}^{'}\left(\frac{dLL}{d\epsilon_{i,t}}\frac{\partial\epsilon_{i,t}}{\partial\mathbf{\xi}} + \frac{\partial LL}{{\partial ln}\left( \sigma_{i,t}^{2} \right)}\frac{{\partial ln}\left( \mathbf{\sigma}_{i,t}^{2} \right)}{\partial\mathbf{\xi}} \right)
@@ -738,50 +832,55 @@ $\frac{\partial^{2} LL}{\partial z \partial z'}$ & & \\
 For censored observations, i.e.\ where the underlying, unobserved dependent variable lies beyond a threshold \citep{tobin1958estimation,amemiya1973regression}, the contribution to the likelihood is given by the normal cumulative distribution function evaluated at the threshold,
 
 \begin{equation}
-F\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) = \int_{- \infty}^{\epsilon_{i,t}/\sigma_{i,t}}{\frac{1}{\sqrt{2\pi}}\exp\left( - \frac{1}{2}\varepsilon^{2} \right)d\varepsilon}
+F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) = \int_{- \infty}^{\gamma\epsilon_{i,t}/\sigma_{i,t}}{\frac{1}{\sqrt{2\pi}}\exp\left( - \frac{1}{2}\varepsilon^{2} \right)d\varepsilon}
 \label{eq:censored}
 \end{equation}
 
 where $\epsilon_{i,t}$ is the residual evaluated at the censoring threshold. Let
 $\gamma$ indicate the type of threshold, with $\gamma = 1$ for a
-lower threshold as above, and $\gamma = - 1$ for an upper threshold. Then
+lower threshold and $\gamma = -1$ for an upper threshold. Define $x=\gamma\epsilon_{i,t}/\sigma_{i,t}$, $\lambda(x)=f(x)/F(x)$, and $s=\ln\sigma_{i,t}$. The derivatives with respect to residual and log standard deviation are
 
 \begin{equation}
-\frac{\partial\ln\left( F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) \right)}{\partial\epsilon_{i,t}} = \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{1}{\sigma_{i,t}}
+\frac{\partial\ln F(x)}{\partial\epsilon_{i,t}} = \frac{\gamma\lambda(x)}{\sigma_{i,t}}
 \label{eq:tobit_deriv1}
 \end{equation}
 
-\begin{equation}\ \frac{\partial\ln\left( F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) \right)}{\partial\ln\sigma_{i,t}} = - \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{\epsilon_{i,t}}{\sigma_{i,t}}
+\begin{equation}
+\frac{\partial\ln F(x)}{\partial s}=-x\lambda(x)
 \label{eq:tobit_deriv2}
 \end{equation}
 
-\begin{equation}\frac{\partial^{2}\ln\left( F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) \right)}{\partial\epsilon_{i,t}^{2}} = - \left( \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{\epsilon_{i,t}}{\sigma_{i,t}^{3}} + \frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}\frac{1}{\sigma_{i,t}^{2}} \right)
+\begin{equation}
+\frac{\partial^{2}\ln F(x)}{\partial\epsilon_{i,t}^{2}}=-\left[\gamma\lambda(x)\frac{\epsilon_{i,t}}{\sigma_{i,t}^{3}}+\frac{\lambda(x)^{2}}{\sigma_{i,t}^{2}}\right]
 \label{eq:tobit_deriv3}
 \end{equation}
 
-\begin{equation}\ \frac{\partial^{2}\ln\left( F\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) \right)}{\partial\epsilon_{i,t}\partial\ln\sigma_{i,t}} = \frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}\frac{\epsilon_{i,t}}{\sigma_{i,t}^{2}} + \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{\epsilon_{i,t}^{2}}{\sigma_{i,t}^{3}} - \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{1}{\sigma_{i,t}}
+\begin{equation}
+\frac{\partial^{2}\ln F(x)}{\partial\epsilon_{i,t}\,\partial s}
+=\frac{\gamma\lambda(x)}{\sigma_{i,t}}\left[x^{2}+x\lambda(x)-1\right]
 \label{eq:tobit_deriv4}
 \end{equation}
 
-\begin{equation}\frac{\partial^{2}\ln\left( F\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right) \right)}{\partial\ln\sigma_{i,t}^{2}} = - \frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)^{2}}\frac{\epsilon_{i,t}^{2}}{\sigma_{i,t}^{2}} - \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{\epsilon_{i,t}^{3}}{\sigma_{i,t}^{3}} + \gamma\frac{f\left( \frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}{F\left( \gamma\frac{\epsilon_{i,t}}{\sigma_{i,t}} \right)}\frac{\epsilon_{i,t}}{\sigma_{i,t}}
+\begin{equation}
+\frac{\partial^{2}\ln F(x)}{\partial s^{2}}
+=x\lambda(x)-x^{3}\lambda(x)-x^{2}\lambda(x)^{2}
 \label{eq:tobit_deriv5}
 \end{equation}
+
+The optimizer's log-variance coordinate is $r=\ln\sigma_{i,t}^{2}=2s$. Consequently,
+\begin{equation}
+\frac{\partial L}{\partial r}=\frac{1}{2}\frac{\partial L}{\partial s},\qquad
+\frac{\partial^{2}L}{\partial\epsilon\,\partial r}=\frac{1}{2}\frac{\partial^{2}L}{\partial\epsilon\,\partial s},\qquad
+\frac{\partial^{2}L}{\partial r^{2}}=\frac{1}{4}\frac{\partial^{2}L}{\partial s^{2}}.
+\label{eq:tobit-logvar-conversion}
+\end{equation}
+When the variance state is $v=\sigma^{2}$ rather than $r$, the conversion in Equation~\ref{eq:variance-logvariance-chain} is also required. The current implementation does not consistently perform this conversion for Tobit observations in ordinary GARCH, and its coded $\partial^{2}L/\partial r^{2}$ term has the wrong sign on the $x^{2}\lambda(x)^{2}$ component. Thus the formulas above are the analytic reference; they do not describe the current Tobit Hessian implementation exactly.
 
 
 
 \subsection{Instrumental variables}\label{instrumental-variables}
 
-If instrumental variables $\mathbf{Z}_{m}$ are supplied for equation
-\emph{m}, the package follows the standard two-stage least squares approach \citep{theil1953repeated,basmann1957generalized}: $\mathbf{X}_{m}$ is replaced by its projection onto the instrument space,
+The current instrumental-variable code path does not implement the conventional two-stage least-squares projection described by $\mathbf{P}_{Z}\mathbf{X}$. When a non-constant instrument matrix is supplied, \texttt{Panel.set\_instrumentals()} assigns that matrix directly as \texttt{XIV}, and the likelihood forms its regression residual using \texttt{XIV}. Thus the current implementation uses the supplied instrument columns in place of the regressor design for the likelihood transformation; it does not estimate first-stage fitted regressors. The earlier description as standard 2SLS was inaccurate. This behavior should not be interpreted as a general IV estimator.
 
-
-\begin{equation}
-\mathbf{X}_{m} = \mathbf{Z}_{m}\left( \mathbf{Z}_{m}^{'}\mathbf{Z}_{m} \right)^{- 1}\mathbf{Z}_{m}^{'}{\check{\mathbf{X}}}_{m}
-\label{eq:instrumental}
-\end{equation}
-
-where ${\check{\mathbf{X}}}_{m}$ is the supplied (potentially endogenous) matrix of independent
-variables, and the right-hand side is its vector of fitted values from a first-stage regression on $\mathbf{Z}_m$. The remainder of the estimation then proceeds with $\mathbf{X}_m$ in place of $\check{\mathbf{X}}_m$.
-
-\printbibliography
+\bibliography{literature}
 \end{document}
